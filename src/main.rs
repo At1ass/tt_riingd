@@ -1,40 +1,72 @@
-extern crate log;
+use std::{fs::File, future::pending, sync::Arc};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use daemonize::Daemonize;
-use hidapi::{DeviceInfo, HidApi, HidDevice};
-use log::{LevelFilter, info};
-use std::{env, error::Error, fs::File, future::pending, sync::{Arc, Mutex}};
+use hidapi::{HidApi, HidDevice};
+use log::{LevelFilter, error, info};
 use syslog::{BasicLogger, Facility, Formatter3164};
+use tokio::sync::Mutex;
 use zbus::{connection, interface};
 
 const VID: u16 = 0x264A; // Thermaltake
+const DEFAULT_PERCENT: u8 = 50;
+const INIT_PACKET: [u8; 3] = [0x00, 0xFE, 0x33];
 
-#[derive(Clone)]
 struct Controller {
-    dev: Arc<Mutex<HidDevice>>,
+    dev: HidDevice,
 }
-impl Controller{
-    fn set_speed(&self, speed: u8) -> Result<()> {
-        let dev = self.dev.lock().unwrap();
-        for channel in 1..5 {
-            dev.write(&build_package(channel, speed))?;
+
+struct Controllers(Arc<Mutex<Vec<Controller>>>);
+
+impl Controllers {
+    async fn send_init(&self) -> Result<()> {
+        let r_guard = self.0.lock().await;
+
+        for device in r_guard.as_slice() {
+            let _ = device.dev.write(&INIT_PACKET); // Send init packet    
         }
+
         Ok(())
+    }
+
+    async fn set_pwm(&self, percent: u8) -> Result<()> {
+        self.0
+            .lock()
+            .await
+            .iter()
+            .try_fold((), |_, device| device.set_speed(percent))
+    }
+}
+
+impl Controller {
+    fn set_speed(&self, speed: u8) -> Result<()> {
+        (1..5).try_fold((), |_, channel| {
+            self.dev
+                .write(&build_package(channel, speed))
+                .map(|_| ())
+                .map_err(|e| anyhow!("{e}"))
+        })
+    }
+}
+
+impl From<Vec<HidDevice>> for Controllers {
+    fn from(value: Vec<HidDevice>) -> Self {
+        Self(Arc::new(Mutex::new(
+            value.into_iter().map(|dev| Controller { dev }).collect(),
+        )))
     }
 }
 
 struct DBusInterface {
-    controller: Vec<Controller>,
+    controllers: Controllers,
 }
 
 #[interface(name = "io.github.tt_riingd1")]
 impl DBusInterface {
-    fn set_speed(&self, speed: u8) {
-        self.controller
-            .iter()
-            .for_each(|device| device.set_speed(speed).unwrap());
-        info!(target: "tt_riing_rs", "SetSpeed: {}", speed);
+    async fn set_speed(&self, speed: u8) {
+        if let Err(e) = self.controllers.set_pwm(speed).await {
+            error!("{e}");
+        }
     }
 }
 
@@ -42,97 +74,67 @@ fn build_package(channel: u8, value: u8) -> [u8; 6] {
     [0x00, 0x32, 0x51, channel, 0x01, value]
 }
 
-fn all_devices_by_pid(api: &HidApi) -> Vec<DeviceInfo> {
-    let devices = api.device_list();
-    let mut tt_devices: Vec<DeviceInfo> = Vec::new();
-    devices.for_each(|device| {
-        if device.vendor_id() == VID {
+fn open_devices(api: &HidApi) -> Vec<HidDevice> {
+    api.device_list()
+        .filter(|device| device.vendor_id() == VID)
+        .inspect(|device| {
             println!(
                 "{:?}, PID: {:04X}",
                 device.product_string().unwrap_or("Unknown"),
                 device.product_id()
-            );
-            tt_devices.push(device.clone());
-        }
-    });
-
-    tt_devices
+            )
+        })
+        .filter_map(|dev| api.open(dev.vendor_id(), dev.product_id()).ok())
+        .collect()
 }
 
-fn open_devices(api: &HidApi, devs: &[DeviceInfo]) -> Result<Vec<HidDevice>> {
-    let mut tt_devices: Vec<HidDevice> = Vec::new();
-    devs.iter().for_each(|dev| {
-        let opened_dev = match api.open(dev.vendor_id(), dev.product_id()) {
-            Ok(device) => device,
-            Err(_) => panic!("Failed to open device: {:?}", dev),
-        };
-
-        tt_devices.push(opened_dev);
-    });
-
-    Ok(tt_devices)
-}
-
-fn send_init(devs: &[Controller]) -> Result<()> {
-    devs.iter().for_each(|device| {
-        let dev = device.dev.lock().unwrap();
-        let _ = dev.write(&[0x00, 0xFE, 0x33]); // Send init packet
-    });
-    Ok(())
-}
-
-fn set_pwm(dev: &[Controller], percent: u8) -> Result<()> {
-    dev.iter().for_each(|device| {
-        for i in 1..5 {
-            let _ = device.dev.lock().unwrap().write(&build_package(i, percent));
-        }
-    });
-    Ok(())
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    let percent: u8 = env::var("TT_PERCENT")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(50);
-
-    let formatter = Formatter3164 {
+fn init_log() -> Result<()> {
+    syslog::unix(Formatter3164 {
         facility: Facility::LOG_USER,
         hostname: None,
         process: "tt_riing_rs".into(),
         pid: 0,
-    };
-    let logger = syslog::unix(formatter).context("open syslog")?;
+    })
+    .map_err(|e| anyhow!("{e}"))
+    .and_then(|logger| {
+        log::set_boxed_logger(Box::new(BasicLogger::new(logger)))
+            .map(|_| log::set_max_level(LevelFilter::Info))
+            .map_err(|e| anyhow!("{e}"))
+    })
+}
 
-    log::set_boxed_logger(Box::new(BasicLogger::new(logger)))
-        .map(|()| log::set_max_level(LevelFilter::Info))?;
+fn into_daemon() -> Result<()> {
+    File::create("/var/tmp/tt_riingd.log")
+        .and_then(|out| Ok((out.try_clone()?, out)))
+        .map_err(|e| anyhow!("{e}"))
+        .and_then(|(stderr, stdout)| {
+            Daemonize::new()
+                .stdout(stdout)
+                .stderr(stderr)
+                .start()
+                .map_err(|e| anyhow!("{e}"))
+        })
+}
 
-    let stdout = File::create("/var/tmp/tt_riingd.log")?;
-    let stderr = stdout.try_clone()?;
-    Daemonize::new()
-        .stdout(stdout)
-        .stderr(stderr)
-        .start()?;
+#[tokio::main]
+async fn main() -> Result<()> {
+    init_log().and(into_daemon())?;
 
-    let api = HidApi::new().context("hidapi init")?;
-    let tt_devs_info = all_devices_by_pid(&api);
-    let devs = open_devices(&api, &tt_devs_info)?;
-    let mut controllers: Vec<Controller> = Vec::new();
-    for info in devs {
-        let ctrl = Controller { dev: Arc::new(Mutex::new(info)) };
-        controllers.push(ctrl);
+    let controllers: Controllers = HidApi::new()
+        .context("hidapi init")
+        .map(|api| open_devices(&api).into())?;
 
-    }
-    send_init(&controllers)?;
-    set_pwm(&controllers, percent)?;
+    // First set
+    controllers
+        .send_init()
+        .await
+        .and(controllers.set_pwm(DEFAULT_PERCENT).await)?;
 
-    info!("старт — {} %", percent);
+    info!("старт — {DEFAULT_PERCENT} %",);
 
-    let dbus = DBusInterface { controller: controllers.clone() };
-    let _conn = connection::Builder::session()?
+    let _ = connection::Builder::session()?
         .name("io.github.tt_riingd")?
-        .serve_at("/io/github/tt_riingd", dbus)?
+        .serve_at("/io/github/tt_riingd", DBusInterface { controllers })?
         .build()
         .await?;
 
