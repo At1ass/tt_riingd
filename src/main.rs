@@ -34,19 +34,17 @@ impl Controllers {
             .lock()
             .await
             .iter()
-            .fold(Ok(()), |res, device| res.and(device.set_speed(percent)))
+            .try_fold((), |_, device| device.set_speed(percent))
     }
 }
 
 impl Controller {
     fn set_speed(&self, speed: u8) -> Result<()> {
-        (1..5).into_iter().fold(Ok(()), |res, channel| {
-            res.and(
-                self.dev
-                    .write(&build_package(channel, speed))
-                    .map(|_| ())
-                    .map_err(|e| anyhow!("{e}")),
-            )
+        (1..5).try_fold((), |_, channel| {
+            self.dev
+                .write(&build_package(channel, speed))
+                .map(|_| ())
+                .map_err(|e| anyhow!("{e}"))
         })
     }
 }
@@ -78,7 +76,6 @@ fn build_package(channel: u8, value: u8) -> [u8; 6] {
 
 fn open_devices(api: &HidApi) -> Vec<HidDevice> {
     api.device_list()
-        .into_iter()
         .filter(|device| device.vendor_id() == VID)
         .inspect(|device| {
             println!(
@@ -135,10 +132,9 @@ async fn main() -> Result<()> {
 
     info!("старт — {DEFAULT_PERCENT} %",);
 
-    let dbus = DBusInterface { controllers };
     let _conn = connection::Builder::session()?
         .name("io.github.tt_riingd")?
-        .serve_at("/io/github/tt_riingd", dbus)?
+        .serve_at("/io/github/tt_riingd", DBusInterface { controllers })?
         .build()
         .await?;
 
