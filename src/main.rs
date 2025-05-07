@@ -132,11 +132,14 @@ async fn main() -> Result<()> {
 
     info!("старт — {DEFAULT_PERCENT} %",);
 
-    let _conn = connection::Builder::session()?
-        .name("io.github.tt_riingd")?
-        .serve_at("/io/github/tt_riingd", DBusInterface { controllers })?
-        .build()
-        .await?;
+    let conn = connection::Builder::session()?;
+    info!("Session init: {conn:?}");
+    let conn = conn.name("io.github.tt_riingd")?;
+    info!("Name init: {conn:?}");
+    let conn = conn.serve_at("/io/github/tt_riingd", DBusInterface { controllers })?;
+    info!("Serve at: {conn:?}");
+    let conn = conn.build().await?;
+    info!("Final conn: {conn:?}");
 
     pending::<()>().await;
 
