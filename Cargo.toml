@@ -1,0 +1,16 @@
+[package]
+name = "tt_riing_rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+parking_lot = "0.12.3"
+uuid = {version = "1.7", features = ["v4"]}
+zbus = "5.6"
+hidapi      = "2.6"
+anyhow      = "1.0"
+daemonize   = "0.5"
+signal-hook = { version = "0.3", features = ["iterator"] }
+syslog      = "7.0"
+log = "0.4.27"
+tokio = { version = "1.45.0", features = ["full"]}
