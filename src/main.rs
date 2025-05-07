@@ -132,7 +132,7 @@ async fn main() -> Result<()> {
 
     info!("старт — {DEFAULT_PERCENT} %",);
 
-    let _ = connection::Builder::session()?
+    let _conn = connection::Builder::session()?
         .name("io.github.tt_riingd")?
         .serve_at("/io/github/tt_riingd", DBusInterface { controllers })?
         .build()
