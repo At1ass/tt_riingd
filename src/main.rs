@@ -1,12 +1,12 @@
 mod controller;
 mod interface;
 
-use std::fs::File;
+use std::{fs::File, sync::Arc};
 
 use anyhow::{Result, anyhow};
 use daemonize::Daemonize;
 use event_listener::Listener;
-use log::{LevelFilter, info};
+use log::{LevelFilter, info, error};
 use syslog::{BasicLogger, Facility, Formatter3164};
 use unconfig::{config, configurable};
 use zbus::connection;
@@ -50,15 +50,28 @@ struct System {
 #[tokio::main]
 #[config(System)]
 async fn tokio_main() -> Result<()> {
-    let controllers = Controllers::init()?;
+    let controllers = Arc::new(Controllers::init()?);
 
     // First set
     controllers
         .send_init()
         .await
-        .and(controllers.set_pwm(DEFAULT_PERCENT).await)?;
+        .and(controllers.set_speed_for_all(DEFAULT_PERCENT).await)?;
 
     info!("Start — {DEFAULT_PERCENT} %",);
+
+    let _timer = tokio::spawn({
+        let ctrls = controllers.clone();
+        async move{
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+        loop {
+            interval.tick().await;
+            if let Err(e) = ctrls.update_speeds().await {
+                error!("{e}");
+            }
+            info!("[timer] tik");
+        }
+    }});
 
     let stop = event_listener::Event::new();
     let stop_listener = stop.listen();
