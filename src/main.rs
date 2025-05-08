@@ -8,6 +8,7 @@ use daemonize::Daemonize;
 use event_listener::Listener;
 use log::{LevelFilter, info};
 use syslog::{BasicLogger, Facility, Formatter3164};
+use unconfig::{config, configurable};
 use zbus::connection;
 
 use controller::{Controllers, DEFAULT_PERCENT};
@@ -41,6 +42,12 @@ fn into_daemon() -> Result<()> {
         })
 }
 
+#[configurable("${TT_RIINGD_CONFIG:config/config.yml}")]
+struct System {
+    some: String,
+}
+
+#[config(System)]
 #[tokio::main]
 async fn tokio_main() -> Result<()> {
     let controllers = Controllers::init()?;
