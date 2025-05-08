@@ -1,107 +1,18 @@
-use std::{fs::File, sync::Arc};
+mod controller;
+mod interface;
 
-use anyhow::{Context, Result, anyhow};
+use std::fs::File;
+
+use anyhow::{Result, anyhow};
 use daemonize::Daemonize;
-use event_listener::{Event, Listener};
-use hidapi::{HidApi, HidDevice};
-use log::{LevelFilter, error, info};
+use event_listener::Listener;
+use log::{LevelFilter, info};
 use syslog::{BasicLogger, Facility, Formatter3164};
-use tokio::sync::Mutex;
-use zbus::{connection, interface, object_server::SignalEmitter};
+use unconfig::{config, configurable};
+use zbus::connection;
 
-const VID: u16 = 0x264A; // Thermaltake
-const DEFAULT_PERCENT: u8 = 50;
-const INIT_PACKET: [u8; 3] = [0x00, 0xFE, 0x33];
-
-struct Controller {
-    dev: HidDevice,
-}
-
-struct Controllers(Arc<Mutex<Vec<Controller>>>);
-
-impl Controllers {
-    async fn send_init(&self) -> Result<()> {
-        let r_guard = self.0.lock().await;
-
-        for device in r_guard.as_slice() {
-            let _ = device.dev.write(&INIT_PACKET); // Send init packet
-        }
-
-        Ok(())
-    }
-
-    async fn set_pwm(&self, percent: u8) -> Result<()> {
-        self.0
-            .lock()
-            .await
-            .iter()
-            .try_fold((), |_, device| device.set_speed(percent))
-    }
-}
-
-impl Controller {
-    fn set_speed(&self, speed: u8) -> Result<()> {
-        (1..5).try_fold((), |_, channel| {
-            self.dev
-                .write(&build_package(channel, speed))
-                .map(|_| ())
-                .map_err(|e| anyhow!("{e}"))
-        })
-    }
-}
-
-impl From<Vec<HidDevice>> for Controllers {
-    fn from(value: Vec<HidDevice>) -> Self {
-        Self(Arc::new(Mutex::new(
-            value.into_iter().map(|dev| Controller { dev }).collect(),
-        )))
-    }
-}
-
-struct DBusInterface {
-    controllers: Controllers,
-    stop: Event,
-}
-
-#[interface(name = "io.github.tt_riingd1")]
-impl DBusInterface {
-    #[zbus(signal)]
-    async fn stopped(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
-
-    async fn stop(
-        &self,
-        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
-    ) -> zbus::fdo::Result<()> {
-        emitter.stopped().await?;
-        self.stop.notify(1);
-
-        Ok(())
-    }
-
-    async fn set_speed(&self, speed: u8) {
-        if let Err(e) = self.controllers.set_pwm(speed).await {
-            error!("{e}");
-        }
-    }
-}
-
-fn build_package(channel: u8, value: u8) -> [u8; 6] {
-    [0x00, 0x32, 0x51, channel, 0x01, value]
-}
-
-fn open_devices(api: &HidApi) -> Vec<HidDevice> {
-    api.device_list()
-        .filter(|device| device.vendor_id() == VID)
-        .inspect(|device| {
-            println!(
-                "{:?}, PID: {:04X}",
-                device.product_string().unwrap_or("Unknown"),
-                device.product_id()
-            )
-        })
-        .filter_map(|dev| api.open(dev.vendor_id(), dev.product_id()).ok())
-        .collect()
-}
+use controller::{Controllers, DEFAULT_PERCENT};
+use interface::DBusInterface;
 
 fn init_log() -> Result<()> {
     syslog::unix(Formatter3164 {
@@ -131,11 +42,15 @@ fn into_daemon() -> Result<()> {
         })
 }
 
+#[configurable("${TT_RIINGD_CONFIG:config/config.yml}")]
+struct System {
+    some: String,
+}
+
+#[config(System)]
 #[tokio::main]
 async fn tokio_main() -> Result<()> {
-    let controllers: Controllers = HidApi::new()
-        .context("hidapi init")
-        .map(|api| open_devices(&api).into())?;
+    let controllers = Controllers::init()?;
 
     // First set
     controllers
@@ -145,17 +60,11 @@ async fn tokio_main() -> Result<()> {
 
     info!("Start — {DEFAULT_PERCENT} %",);
 
-    let stop_event = event_listener::Event::new();
-    let stop_listener = stop_event.listen();
+    let stop = event_listener::Event::new();
+    let stop_listener = stop.listen();
     let _conn = connection::Builder::session()?
         .name("io.github.tt_riingd")?
-        .serve_at(
-            "/io/github/tt_riingd",
-            DBusInterface {
-                controllers,
-                stop: stop_event,
-            },
-        )?
+        .serve_at("/io/github/tt_riingd", DBusInterface { controllers, stop })?
         .build()
         .await?;
 
@@ -166,8 +75,7 @@ async fn tokio_main() -> Result<()> {
 }
 
 fn main() -> Result<()> {
-    init_log().and(into_daemon())?;
-
-    tokio_main()?;
-    Ok(())
+    init_log()
+        .and_then(|_| into_daemon())
+        .and_then(|_| tokio_main())
 }
