@@ -47,8 +47,8 @@ struct System {
     some: String,
 }
 
-#[config(System)]
 #[tokio::main]
+#[config(System)]
 async fn tokio_main() -> Result<()> {
     let controllers = Controllers::init()?;
 
@@ -75,7 +75,7 @@ async fn tokio_main() -> Result<()> {
 }
 
 fn main() -> Result<()> {
-    init_log()
-        .and_then(|_| into_daemon())
+    into_daemon()
+        .and_then(|_| init_log())
         .and_then(|_| tokio_main())
 }

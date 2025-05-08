@@ -15,7 +15,7 @@ signal-hook = { version = "0.3", features = ["iterator"] }
 event-listener = "5.4.0"
 
 # Config
-unconfig = { git = "https://github.com/rojer-98/unconfig.git" }
+unconfig = { git = "https://github.com/rojer-98/unconfig.git", default-features = false }
 
 # Log
 syslog = "7.0"
