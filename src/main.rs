@@ -1,12 +1,13 @@
-use std::{fs::File, future::pending, sync::Arc};
+use std::{fs::File, sync::Arc};
 
 use anyhow::{Context, Result, anyhow};
 use daemonize::Daemonize;
+use event_listener::{Event, Listener};
 use hidapi::{HidApi, HidDevice};
 use log::{LevelFilter, error, info};
 use syslog::{BasicLogger, Facility, Formatter3164};
 use tokio::sync::Mutex;
-use zbus::{connection, interface};
+use zbus::{connection, interface, object_server::SignalEmitter};
 
 const VID: u16 = 0x264A; // Thermaltake
 const DEFAULT_PERCENT: u8 = 50;
@@ -23,7 +24,7 @@ impl Controllers {
         let r_guard = self.0.lock().await;
 
         for device in r_guard.as_slice() {
-            let _ = device.dev.write(&INIT_PACKET); // Send init packet    
+            let _ = device.dev.write(&INIT_PACKET); // Send init packet
         }
 
         Ok(())
@@ -59,10 +60,24 @@ impl From<Vec<HidDevice>> for Controllers {
 
 struct DBusInterface {
     controllers: Controllers,
+    stop: Event,
 }
 
 #[interface(name = "io.github.tt_riingd1")]
 impl DBusInterface {
+    #[zbus(signal)]
+    async fn stopped(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
+
+    async fn stop(
+        &self,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> zbus::fdo::Result<()> {
+        emitter.stopped().await?;
+        self.stop.notify(1);
+
+        Ok(())
+    }
+
     async fn set_speed(&self, speed: u8) {
         if let Err(e) = self.controllers.set_pwm(speed).await {
             error!("{e}");
@@ -117,9 +132,7 @@ fn into_daemon() -> Result<()> {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    init_log().and(into_daemon())?;
-
+async fn tokio_main() -> Result<()> {
     let controllers: Controllers = HidApi::new()
         .context("hidapi init")
         .map(|api| open_devices(&api).into())?;
@@ -130,15 +143,31 @@ async fn main() -> Result<()> {
         .await
         .and(controllers.set_pwm(DEFAULT_PERCENT).await)?;
 
-    info!("старт — {DEFAULT_PERCENT} %",);
+    info!("Start — {DEFAULT_PERCENT} %",);
 
+    let stop_event = event_listener::Event::new();
+    let stop_listener = stop_event.listen();
     let _conn = connection::Builder::session()?
         .name("io.github.tt_riingd")?
-        .serve_at("/io/github/tt_riingd", DBusInterface { controllers })?
+        .serve_at(
+            "/io/github/tt_riingd",
+            DBusInterface {
+                controllers,
+                stop: stop_event,
+            },
+        )?
         .build()
         .await?;
 
-    pending::<()>().await;
+    stop_listener.wait();
+    info!("Stopped");
 
+    Ok(())
+}
+
+fn main() -> Result<()> {
+    init_log().and(into_daemon())?;
+
+    tokio_main()?;
     Ok(())
 }
