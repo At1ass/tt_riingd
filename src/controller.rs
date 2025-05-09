@@ -12,13 +12,14 @@ pub const INIT_PACKET: [u8; 3] = [0x00, 0xFE, 0x33];
 #[derive(Debug)]
 struct Controller {
     dev: HidDevice,
+    speed: u8,
 }
 
 #[derive(Debug, Clone)]
 pub struct Controllers(Arc<Mutex<Vec<Controller>>>);
 
 impl Controllers {
-    pub fn init() -> Result<Self> {
+    pub fn init(speed: u8) -> Result<Self> {
         Ok(Self(
             HidApi::new()
                 .map(|api| {
@@ -36,7 +37,10 @@ impl Controllers {
                 })
                 .map(|devices| {
                     Arc::new(Mutex::new(
-                        devices.into_iter().map(|dev| Controller { dev }).collect(),
+                        devices
+                            .into_iter()
+                            .map(|device| Controller { dev: device, speed })
+                            .collect(),
                     ))
                 })?,
         ))
@@ -52,23 +56,56 @@ impl Controllers {
         Ok(())
     }
 
-    pub async fn set_pwm(&self, percent: u8) -> Result<()> {
+    pub async fn set_speed_for_all(&self, percent: u8) -> Result<()> {
         self.0
             .lock()
             .await
             .iter()
-            .try_fold((), |_, device| device.set_speed(percent))
+            .try_for_each(|device| device.set_speed_for_all_fans(percent))
+    }
+
+    pub async fn set_speed_for_timer(&self, speed: u8) {
+        self.0.lock().await.iter_mut().for_each(|device| {
+            device.speed = speed;
+        })
+    }
+
+    pub async fn get_speed_for_timer(&self) -> Result<u8> {
+        self.0
+            .lock()
+            .await
+            .iter()
+            .map(|device| device.speed)
+            .max()
+            .ok_or(anyhow!("Cannot read speeds"))
+    }
+
+    pub async fn update_speeds(&self) -> Result<()> {
+        self.0
+            .lock()
+            .await
+            .iter()
+            .try_for_each(|device| device.update_speeds())
     }
 }
 
 impl Controller {
-    fn set_speed(&self, speed: u8) -> Result<()> {
-        (1..5).try_fold((), |_, channel| {
-            self.dev
-                .write(&build_package(channel, speed))
-                .map(|_| ())
-                .map_err(|e| anyhow!("{e}"))
-        })
+    fn set_speed_for_all_fans(&self, speed: u8) -> Result<()> {
+        (1..5).try_fold((), |_, channel| self.set_speed_for_fan(channel, speed))
+    }
+
+    fn set_speed_for_fan(&self, channel: u8, speed: u8) -> Result<()> {
+        self.write(&build_package(channel, speed))
+    }
+
+    fn update_speeds(&self) -> Result<()> {
+        (1..5).try_fold((), |_, channel| self.set_speed_for_fan(channel, self.speed))
+    }
+
+    fn write(&self, data: &[u8]) -> Result<()> {
+        let _ = self.dev.write(data)?;
+
+        Ok(())
     }
 }
 

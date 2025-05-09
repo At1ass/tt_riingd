@@ -1,2 +1,6 @@
 system:
-  some: "123"
+  init_speed: 50
+  tick_seconds: 2
+
+interface:
+  version: "1.0"

@@ -9,6 +9,7 @@ pub struct DBusInterface {
 
     // Events
     pub stop: Event,
+    pub version: String,
 }
 
 #[interface(name = "io.github.tt_riingd1")]
@@ -26,9 +27,28 @@ impl DBusInterface {
         Ok(())
     }
 
-    async fn set_speed(&self, speed: u8) {
-        if let Err(e) = self.controllers.set_pwm(speed).await {
+    async fn set_speed_for_all(&self, speed: u8) {
+        if let Err(e) = self.controllers.set_speed_for_all(speed).await {
             error!("{e}");
         }
+    }
+
+    #[zbus(property)]
+    async fn version(&self) -> String {
+        self.version.clone()
+    }
+
+    #[zbus(property)]
+    async fn speed_for_timer(&self) -> String {
+        if let Ok(speed) = self.controllers.get_speed_for_timer().await {
+            format!("{:?}", speed)
+        } else {
+            "Unknown".to_string()
+        }
+    }
+
+    #[zbus(property)]
+    async fn set_speed_for_timer(&mut self, speed: u8) {
+        self.controllers.set_speed_for_timer(speed).await;
     }
 }
