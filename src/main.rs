@@ -1,13 +1,15 @@
 mod controller;
 mod interface;
 
-use std::{fs::File, sync::Arc};
+use std::{fs::File, time::Duration};
 
 use anyhow::{Result, anyhow};
 use daemonize::Daemonize;
 use event_listener::Listener;
-use log::{LevelFilter, info, error};
+use log::{LevelFilter, error, info};
 use syslog::{BasicLogger, Facility, Formatter3164};
+use tokio::time::interval;
+use tokio_stream::{StreamExt, wrappers::IntervalStream};
 use unconfig::{config, configurable};
 use zbus::connection;
 
@@ -43,14 +45,24 @@ fn into_daemon() -> Result<()> {
 }
 
 #[configurable("${TT_RIINGD_CONFIG:config/config.yml}")]
+struct Interface {
+    version: String,
+}
+
+#[configurable("${TT_RIINGD_CONFIG:config/config.yml}")]
 struct System {
-    some: String,
+    init_speed: u8,
+    tick_seconds: u64,
 }
 
 #[tokio::main]
-#[config(System)]
+#[config(System, Interface)]
 async fn tokio_main() -> Result<()> {
-    let controllers = Arc::new(Controllers::init()?);
+    let init_speed = CONFIG_SYSTEM.init_speed();
+    let version = CONFIG_INTERFACE.version();
+    let tick_seconds = CONFIG_SYSTEM.tick_seconds();
+
+    let controllers = Controllers::init(init_speed)?;
 
     // First set
     controllers
@@ -58,26 +70,32 @@ async fn tokio_main() -> Result<()> {
         .await
         .and(controllers.set_speed_for_all(DEFAULT_PERCENT).await)?;
 
-    info!("Start — {DEFAULT_PERCENT} %",);
+    info!("Start — {init_speed}%");
 
     let _timer = tokio::spawn({
         let ctrls = controllers.clone();
-        async move{
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
-        loop {
-            interval.tick().await;
-            if let Err(e) = ctrls.update_speeds().await {
-                error!("{e}");
+
+        let mut interval_stream = IntervalStream::new(interval(Duration::from_secs(tick_seconds)));
+        async move {
+            while interval_stream.next().await.is_some() {
+                if let Err(e) = ctrls.update_speeds().await {
+                    error!("Update speed error: {e}");
+                }
+
+                info!("[timer] tick");
             }
-            info!("[timer] tik");
         }
-    }});
+    });
 
     let stop = event_listener::Event::new();
     let stop_listener = stop.listen();
     let _conn = connection::Builder::session()?
         .name("io.github.tt_riingd")?
-        .serve_at("/io/github/tt_riingd", DBusInterface { controllers, stop })?
+        .serve_at("/io/github/tt_riingd", DBusInterface {
+            controllers,
+            stop,
+            version,
+        })?
         .build()
         .await?;
 

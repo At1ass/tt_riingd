@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use event_listener::Event;
 use log::error;
 use zbus::{interface, object_server::SignalEmitter};
@@ -7,10 +5,11 @@ use zbus::{interface, object_server::SignalEmitter};
 use crate::controller::Controllers;
 
 pub struct DBusInterface {
-    pub controllers: Arc<Controllers>,
+    pub controllers: Controllers,
 
     // Events
     pub stop: Event,
+    pub version: String,
 }
 
 #[interface(name = "io.github.tt_riingd1")]
@@ -35,8 +34,8 @@ impl DBusInterface {
     }
 
     #[zbus(property)]
-    async fn version(&self) -> &'static str {
-        "1.0"
+    async fn version(&self) -> String {
+        self.version.clone()
     }
 
     #[zbus(property)]
@@ -50,9 +49,6 @@ impl DBusInterface {
 
     #[zbus(property)]
     async fn set_speed_for_timer(&mut self, speed: u8) {
-        if let Err(e) = self.controllers.set_speed_for_timer(speed).await {
-            error!("{e}");
-        }
+        self.controllers.set_speed_for_timer(speed).await;
     }
-
 }

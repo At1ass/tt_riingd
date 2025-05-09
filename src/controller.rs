@@ -19,7 +19,7 @@ struct Controller {
 pub struct Controllers(Arc<Mutex<Vec<Controller>>>);
 
 impl Controllers {
-    pub fn init() -> Result<Self> {
+    pub fn init(speed: u8) -> Result<Self> {
         Ok(Self(
             HidApi::new()
                 .map(|api| {
@@ -39,10 +39,7 @@ impl Controllers {
                     Arc::new(Mutex::new(
                         devices
                             .into_iter()
-                            .map(|device| Controller {
-                                dev: device,
-                                speed: 50 as u8,
-                            })
+                            .map(|device| Controller { dev: device, speed })
                             .collect(),
                     ))
                 })?,
@@ -67,10 +64,9 @@ impl Controllers {
             .try_for_each(|device| device.set_speed_for_all_fans(percent))
     }
 
-    pub async fn set_speed_for_timer(&self, speed: u8) -> Result<()> {
-        self.0.lock().await.iter_mut().try_for_each(|device| {
+    pub async fn set_speed_for_timer(&self, speed: u8) {
+        self.0.lock().await.iter_mut().for_each(|device| {
             device.speed = speed;
-            Ok(())
         })
     }
 
@@ -99,14 +95,17 @@ impl Controller {
     }
 
     fn set_speed_for_fan(&self, channel: u8, speed: u8) -> Result<()> {
-        self.dev
-            .write(&build_package(channel, speed))
-            .map(|_| ())
-            .map_err(|e| anyhow!("{e}"))
+        self.write(&build_package(channel, speed))
     }
 
     fn update_speeds(&self) -> Result<()> {
         (1..5).try_fold((), |_, channel| self.set_speed_for_fan(channel, self.speed))
+    }
+
+    fn write(&self, data: &[u8]) -> Result<()> {
+        let _ = self.dev.write(data)?;
+
+        Ok(())
     }
 }
 
