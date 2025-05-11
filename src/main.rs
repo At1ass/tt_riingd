@@ -13,7 +13,7 @@ use tokio_stream::{StreamExt, wrappers::IntervalStream};
 use unconfig::{config, configurable};
 use zbus::connection;
 
-use controller::{Controllers, DEFAULT_PERCENT};
+use controller::Controllers;
 use interface::DBusInterface;
 
 fn init_log() -> Result<()> {
@@ -67,8 +67,7 @@ async fn tokio_main() -> Result<()> {
     // First set
     controllers
         .send_init()
-        .await
-        .and(controllers.set_speed_for_all(DEFAULT_PERCENT).await)?;
+        .await?;
 
     info!("Start — {init_speed}%");
 
@@ -78,11 +77,12 @@ async fn tokio_main() -> Result<()> {
         let mut interval_stream = IntervalStream::new(interval(Duration::from_secs(tick_seconds)));
         async move {
             while interval_stream.next().await.is_some() {
-                if let Err(e) = ctrls.update_speeds().await {
+                let temp = rand::random_range(20.0..50.0);
+                if let Err(e) = ctrls.update_speeds(temp).await {
                     error!("Update speed error: {e}");
                 }
 
-                info!("[timer] tick");
+                info!("[timer] tick. Temp: {temp}°C");
             }
         }
     });

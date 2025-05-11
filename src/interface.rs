@@ -1,8 +1,9 @@
 use event_listener::Event;
 use log::error;
+use serde_json::from_str;
 use zbus::{interface, object_server::SignalEmitter};
 
-use crate::controller::Controllers;
+use crate::controller::{Controllers, FanCurve};
 
 pub struct DBusInterface {
     pub controllers: Controllers,
@@ -27,28 +28,40 @@ impl DBusInterface {
         Ok(())
     }
 
-    async fn set_speed_for_all(&self, speed: u8) {
-        if let Err(e) = self.controllers.set_speed_for_all(speed).await {
-            error!("{e}");
-        }
-    }
-
     #[zbus(property)]
     async fn version(&self) -> String {
         self.version.clone()
     }
 
-    #[zbus(property)]
-    async fn speed_for_timer(&self) -> String {
-        if let Ok(speed) = self.controllers.get_speed_for_timer().await {
-            format!("{:?}", speed)
-        } else {
-            "Unknown".to_string()
+    async fn switch_active_curve(&self, controller: u8, channel: u8, curve: String) {
+        if let Err(e) = self
+            .controllers
+            .switch_curve(controller, channel, &curve)
+            .await
+        {
+            error!("{e}")
         }
     }
 
-    #[zbus(property)]
-    async fn set_speed_for_timer(&mut self, speed: u8) {
-        self.controllers.set_speed_for_timer(speed).await;
+    async fn get_active_curve(&self, controller: u8, channel: u8) -> zbus::fdo::Result<String> {
+        self.controllers
+            .get_active_curve(controller, channel)
+            .await
+            .map_err(|e| zbus::fdo::Error::Failed(format!("Curve not found: {e}")))
+    }
+
+    async fn update_curve_data(
+        &self,
+        controller: u8,
+        channel: u8,
+        curve: &str,
+        curve_data: &str,
+    ) -> zbus::fdo::Result<()> {
+        let fan_curve: FanCurve = from_str(curve_data)
+            .map_err(|e| zbus::fdo::Error::InvalidArgs(format!("Invalid curve data: {e}")))?;
+        self.controllers
+            .update_curve_data(controller, channel, curve, fan_curve)
+            .await
+            .map_err(|e| zbus::fdo::Error::Failed(format!("Failed to update curve data: {e}")))
     }
 }
