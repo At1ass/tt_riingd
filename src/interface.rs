@@ -3,7 +3,8 @@ use log::error;
 use serde_json::from_str;
 use zbus::{interface, object_server::SignalEmitter};
 
-use crate::controller::{Controllers, FanCurve};
+use crate::controller::Controllers;
+use crate::fan_curve::FanCurve;
 
 pub struct DBusInterface {
     pub controllers: Controllers,
@@ -60,7 +61,7 @@ impl DBusInterface {
         let fan_curve: FanCurve = from_str(curve_data)
             .map_err(|e| zbus::fdo::Error::InvalidArgs(format!("Invalid curve data: {e}")))?;
         self.controllers
-            .update_curve_data(controller, channel, curve, fan_curve)
+            .update_curve_data(controller, channel, curve, &fan_curve)
             .await
             .map_err(|e| zbus::fdo::Error::Failed(format!("Failed to update curve data: {e}")))
     }

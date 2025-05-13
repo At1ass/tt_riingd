@@ -1,5 +1,8 @@
 mod controller;
 mod interface;
+mod fan_curve;
+mod fan_controller;
+mod drivers;
 
 use std::{fs::File, time::Duration};
 
@@ -13,7 +16,6 @@ use tokio_stream::{StreamExt, wrappers::IntervalStream};
 use unconfig::{config, configurable};
 use zbus::connection;
 
-use controller::Controllers;
 use interface::DBusInterface;
 
 fn init_log() -> Result<()> {
@@ -62,7 +64,7 @@ async fn tokio_main() -> Result<()> {
     let version = CONFIG_INTERFACE.version();
     let tick_seconds = CONFIG_SYSTEM.tick_seconds();
 
-    let controllers = Controllers::init(init_speed)?;
+    let controllers = controller::Controllers::init(init_speed)?;
 
     // First set
     controllers
