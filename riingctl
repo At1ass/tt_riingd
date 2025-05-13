@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+#
+# riingctl - utility for tt_riingd daemon control with D-Bus
+#
+
+SERVICE="io.github.tt_riingd"
+OBJECT="/io/github/tt_riingd"
+INTERFACE="io.github.tt_riingd1"
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") <command> [parameters]
+
+Commands:
+  introspect
+      Show D-Bus introspection for $SERVICE
+
+  version
+      Get Version
+
+  get-active-curve <controller:u8> <fan:u8>
+      Call GetActiveCurve(y y) → s
+      Returns active curve name for fan
+
+  stop
+      Call Stop() for daemon
+
+  switch-active-curve <controller:u8> <fan:u8> <curve_name:s>
+      Call SwitchActiveCurve(y y s)
+      Switch active curve for fan on curve_name
+
+  update-curve-data <controller:u8> <fan:u8> <curve_name:s> <curve_json_data:s>
+      Call UpdateCurveData(y y s s)
+      Update data for curve_name with curve_json_data.
+      Not switch active curve
+
+Examples:
+  riingctl introspect
+  riingctl version
+  riingctl get-active-curve 1 1
+  riingctl stop
+  riingctl switch-active-curve 1 1 StepCurve
+  riingctl update-curve-data 1 1 StepCurve
+  '{ "t": "StepCurve", "c": { "temps": [0.0, 100.0], "speeds": [20, 100]}}'
+EOF
+  exit 1
+}
+
+[ $# -ge 1 ] || usage
+cmd=$1; shift
+
+case "$cmd" in
+  introspect)
+    exec busctl --user introspect "$SERVICE" "$OBJECT"
+    ;;
+
+  version)
+    exec busctl --user get-property "$SERVICE" "$OBJECT" "$INTERFACE" Version
+    ;;
+
+  get-active-curve)
+    [ $# -eq 2 ] || usage
+    controller=$1; fan=$2
+    exec busctl --user call \
+      "$SERVICE" "$OBJECT" "$INTERFACE" \
+      GetActiveCurve yy \
+      "$controller" "$fan"
+    ;;
+
+  stop)
+    exec busctl --user call "$SERVICE" "$OBJECT" "$INTERFACE" Stop
+    ;;
+
+  switch-active-curve)
+    [ $# -eq 3 ] || usage
+    controller=$1; fan=$2; curve_name=$3
+    exec busctl --user call \
+      "$SERVICE" "$OBJECT" "$INTERFACE" \
+      SwitchActiveCurve yys \
+      "$controller" "$fan" "$curve_name"
+    ;;
+
+  update-curve-data)
+    [ $# -eq 4 ] || usage
+    controller=$1; fan=$2; curve_name=$3; curve_data_json=$4
+    exec busctl --user call \
+      "$SERVICE" "$OBJECT" "$INTERFACE" \
+      UpdateCurveData yyss \
+      "$controller" "$fan" "$curve_name" "$curve_data_json"
+    ;;
+
+  *)
+    usage
+    ;;
+esac
