@@ -1,8 +1,7 @@
-use std::future;
-use std::sync::Arc;
+use std::{slice::Iter as SliceIter, sync::Arc};
 
-use anyhow::{Context, Ok, Result};
-use futures::stream::{StreamExt, TryStreamExt, iter};
+use anyhow::{Ok, Result, anyhow};
+use futures::stream::{Iter as FutureIter, StreamExt, iter};
 use hidapi::HidApi;
 
 use crate::fan_curve::FanCurve;
@@ -24,44 +23,29 @@ impl Controllers {
     }
 
     pub async fn send_init(&self) -> Result<()> {
-        let clonned = self.0.clone();
-        iter(clonned.iter())
-            .map(Ok)
-            .try_for_each(|device| async { device.send_init().await })
+        self.async_iter()
+            .fold(Ok(()), |acc, device| async {
+                acc.and(device.send_init().await)
+            })
             .await
     }
 
     pub async fn update_speeds(&self, temp: f32) -> Result<()> {
-        let clonned = self.0.clone();
-        iter(clonned.iter())
-            .map(Ok)
-            .try_for_each(|device| async { device.update_speeds(temp).await })
+        self.async_iter()
+            .fold(Ok(()), |acc, device| async {
+                acc.and(device.update_speeds(temp).await)
+            })
             .await
     }
 
     pub async fn switch_curve(&self, controller: u8, channel: u8, curve: &str) -> Result<()> {
-        let clonned = self.0.clone();
-        iter(clonned.iter().enumerate())
-            .filter(|(idx, _)| future::ready(idx + 1 == controller as usize))
-            .map(|(_, device)| device)
-            .map(Ok)
-            .try_for_each(|device| async { device.switch_curve(channel, curve).await })
+        self.get_device(controller)?
+            .switch_curve(channel, curve)
             .await
     }
 
     pub async fn get_active_curve(&self, controller: u8, channel: u8) -> Result<String> {
-        let clonned = self.0.clone();
-        let dev_opt = iter(clonned.iter().enumerate())
-            .filter(|(idx, _)| future::ready(idx + 1 == controller as usize))
-            .map(|(_, device)| device)
-            .map(Ok)
-            .try_next()
-            .await?;
-
-        let dev = dev_opt.context("Controller not found")?;
-
-        dev.get_active_curve(channel).await
-
+        self.get_device(controller)?.get_active_curve(channel).await
     }
 
     pub async fn update_curve_data(
@@ -71,12 +55,20 @@ impl Controllers {
         curve: &str,
         curve_data: &FanCurve,
     ) -> Result<()> {
-        let clonned = self.0.clone();
-        iter(clonned.iter().enumerate())
-            .filter(|(idx, _)| future::ready(idx + 1 == controller as usize))
+        self.get_device(controller)?
+            .update_curve_data(channel, curve, curve_data).await
+    }
+
+    fn get_device(&self, controller: u8) -> Result<&Box<dyn FanController>> {
+        self.0
+            .iter()
+            .enumerate()
+            .find(|(idx, _)| idx + 1 == controller as usize)
             .map(|(_, device)| device)
-            .map(Ok)
-            .try_for_each(|device| async { device.update_curve_data(channel, curve, curve_data).await })
-            .await
+            .ok_or(anyhow! {"Device {controller} not found"})
+    }
+
+    fn async_iter(&self) -> FutureIter<SliceIter<'_, Box<dyn FanController>>> {
+        iter(self.0.iter())
     }
 }
