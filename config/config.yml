@@ -1,6 +1,100 @@
-system:
-  init_speed: 50
-  tick_seconds: 2
+version: 1
+tick-seconds: 2                 # глобальный период опроса, c
 
-interface:
-  version: "1.0"
+################################################################################
+#  Контроллеры и их вентиляторы
+################################################################################
+controllers:
+  - id: "pump"                  # логический идентификатор (используется в D-Bus)
+    kind: riing-quad            # enum ControllerCfg
+    usb:                        # как вы уже делаете
+      vid: 0x264A
+      pid: 0x232B
+    fans:                       # ЯВНО описываем каждый канал
+      - idx: 1                  # аппаратный номер (1‒5 для Riing Quad)
+        name: "CPU_FAN_PUSH"    # человекочитаемое имя (GUI)
+        active_curve: "step-curve"
+        curve:
+          step-curve:
+            id: "Hi"
+            kind: step-curve
+            tmps: [0.0, 100.0]
+            spds: [20, 100]
+          constant:
+            id: "Lo"
+            kind: constant
+            speed: 100
+      - idx: 2
+        name: "CPU_FAN_PULL"
+        active_curve: "constant"
+        curve:
+          constant:
+            id: "Hi"
+            kind: constant
+            speed: 60
+      - idx: 3
+        name: "GPU_FAN"
+        active_curve: "constant"
+        curve:
+          constant:
+            id: "Hi"
+            kind: constant
+            speed: 60
+  - id: "rad"
+    kind: riing-quad
+    usb: { vid: 0x264A, pid: 0x232C, serial: "HQP2024060144" }
+    fans:
+      - idx: 1
+        name: "RAD_TOP"
+        active_curve: "constant"
+        curve:
+          constant:
+            id: "Hi"
+            kind: constant
+            speed: 60
+      - idx: 2
+        name: "RAD_NE_TOP"
+        active_curve: "constant"
+        curve:
+          constant:
+            id: "Hi"
+            kind: constant
+            speed: 60
+      - idx: 3
+        name: "RAD_NE"
+        active_curve: "constant"
+        curve:
+          constant:
+            id: "Hi"
+            kind: constant
+            speed: 60
+
+################################################################################
+#  Сенсоры температуры
+################################################################################
+sensors:
+  - id: "cpu_pkg"
+    kind: lm-sensors
+    chip: "nct6687-isa-0a20"
+    feature: "temp1"
+
+  - id: "gpu_core"
+    kind: lm-sensors
+    chip: "mt7921_phy0-pci-0d00"
+    feature: "temp1"
+
+################################################################################
+#  Сопоставление: какой сенсор «драйвит» какой вентилятор
+################################################################################
+mappings:
+  - sensor: "cpu_pkg"
+    targets:
+      - { controller: 1, fan_idx: 1 }
+      - { controller: 1, fan_idx: 2 }
+      - { controller: 1, fan_idx: 3 }
+
+  - sensor: "gpu_core"
+    targets:
+      - { controller: 2, fan_idx: 3 }
+      - { controller: 2,  fan_idx: 2 }
+      - { controller: 2,  fan_idx: 1 }
