@@ -1,6 +1,6 @@
 [package]
 name = "tt_riing_rs"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 
 [dependencies]
@@ -16,7 +16,7 @@ signal-hook = { version = "0.3", features = ["iterator"] }
 event-listener = "5.4.0"
 
 # Config
-unconfig = { git = "https://github.com/rojer-98/unconfig.git", default-features = false }
+# unconfig = { git = "https://github.com/rojer-98/unconfig.git", default-features = false }
 
 # Log
 syslog = "7.0"
@@ -31,3 +31,8 @@ serde_json = "1.0.140"
 zvariant = { version = "5.5.1" }
 async-trait = "0.1.88"
 futures = "0.3.31"
+lm-sensors = "0.3.2"
+dashmap = "7.0.0-rc2"
+serde_yaml = "0.9.34"
+clap = { version = "4.5.38", features = ["derive"] }
+once_cell = "1.21.3"

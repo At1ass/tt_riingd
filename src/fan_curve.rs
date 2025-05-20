@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::config::CurveCfg;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Point {
     x: f32,
@@ -30,6 +32,16 @@ impl From<(f32, f32)> for Point {
         Self {
             x: value.0,
             y: value.1,
+        }
+    }
+}
+
+impl From<CurveCfg> for FanCurve {
+    fn from(curve_cfg: CurveCfg) -> Self {
+        match curve_cfg {
+            CurveCfg::Constant { id: _, speed } => FanCurve::Constant(speed),
+            CurveCfg::StepCurve { id: _, tmps, spds } => FanCurve::StepCurve { temps: tmps.clone(), speeds: spds.clone() },
+            CurveCfg::Bezier { id: _, points } => FanCurve::BezierCurve { points: points.clone()},
         }
     }
 }

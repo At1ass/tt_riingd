@@ -8,6 +8,9 @@ pub trait FanController: Send + Sync + core::fmt::Debug {
     async fn send_init(&self) -> Result<()>;
 
     async fn update_speeds(&self, temp: f32) -> Result<()>;
+    async fn update_channel(&self, _channel: u8, temp: f32) -> Result<()> {
+        self.update_speeds(temp).await
+    }
     async fn switch_curve(&self, channel: u8, curve: &str) -> Result<()>;
     async fn get_active_curve(&self, channel: u8) -> Result<String>;
     async fn update_curve_data(

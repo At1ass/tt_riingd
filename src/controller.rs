@@ -4,8 +4,7 @@ use anyhow::{Ok, Result, anyhow};
 use futures::stream::{Iter as FutureIter, StreamExt, iter};
 use hidapi::HidApi;
 
-use crate::fan_curve::FanCurve;
-use crate::{drivers, fan_controller::FanController};
+use crate::{config::Config, drivers, fan_controller::FanController, fan_curve::FanCurve};
 
 #[derive(Debug, Clone)]
 pub struct Controllers(Arc<Vec<Box<dyn FanController>>>);
@@ -17,6 +16,18 @@ impl Controllers {
 
         controllers.extend(drivers::tt_riing_quad::TTRiingQuad::probe(
             &api, init_speed,
+        )?);
+
+        Ok(Self(Arc::new(controllers)))
+    }
+
+    pub fn init_from_cfg(cfg: &Config) -> Result<Self> {
+        let api = HidApi::new()?;
+        let mut controllers = Vec::<Box<dyn FanController>>::new();
+
+        controllers.extend(drivers::tt_riing_quad::TTRiingQuad::find_controllers(
+            &api,
+            &cfg.controllers
         )?);
 
         Ok(Self(Arc::new(controllers)))
@@ -38,6 +49,12 @@ impl Controllers {
             .await
     }
 
+    pub async fn update_channel(&self, controller: u8, channel: u8, temp: f32) -> Result<()> {
+        self.get_device(controller)?
+            .update_channel(channel, temp)
+            .await
+    }
+
     pub async fn switch_curve(&self, controller: u8, channel: u8, curve: &str) -> Result<()> {
         self.get_device(controller)?
             .switch_curve(channel, curve)
@@ -56,16 +73,18 @@ impl Controllers {
         curve_data: &FanCurve,
     ) -> Result<()> {
         self.get_device(controller)?
-            .update_curve_data(channel, curve, curve_data).await
+            .update_curve_data(channel, curve, curve_data)
+            .await
     }
 
+    #[allow(clippy::borrowed_box)]
     fn get_device(&self, controller: u8) -> Result<&Box<dyn FanController>> {
         self.0
             .iter()
             .enumerate()
             .find(|(idx, _)| idx + 1 == controller as usize)
             .map(|(_, device)| device)
-            .ok_or(anyhow! {"Device {controller} not found"})
+            .ok_or(anyhow!("Device `{controller}` not found"))
     }
 
     fn async_iter(&self) -> FutureIter<SliceIter<'_, Box<dyn FanController>>> {

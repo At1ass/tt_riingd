@@ -1,5 +1,5 @@
-use crate::fan_controller::FanController;
 use crate::fan_curve::FanCurve;
+use crate::{config::ControllerCfg, fan_controller::FanController};
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Ok, Result, anyhow};
@@ -23,6 +23,7 @@ struct Fan {
 
 #[derive(Debug)]
 struct Controller {
+    name: String,
     dev: HidDevice,
     fans: Vec<Fan>,
 }
@@ -48,6 +49,10 @@ impl FanController for TTRiingQuad {
             self.process_fan(idx, temp).await?;
         }
         Ok(())
+    }
+
+    async fn update_channel(&self, channel: u8, temp: f32) -> Result<()> {
+        self.process_fan((channel - 1) as usize, temp).await
     }
 
     async fn switch_curve(&self, channel: u8, curve: &str) -> Result<()> {
@@ -101,9 +106,11 @@ impl TTRiingQuad {
             .device_list()
             .filter(|d| d.vendor_id() == VID)
             .inspect(|d| info!("{:?} device PID={:04X}", d.product_string(), d.product_id()))
-            .filter_map(|d| {
+            .enumerate()
+            .filter_map(|(idx, d)| {
                 api.open(d.vendor_id(), d.product_id()).ok().map(|device| {
                     Box::new(TTRiingQuad(Arc::new(Mutex::new(Controller {
+                        name: format!("TTRiingQuad{}", idx + 1),
                         dev: device,
                         fans: (0..5)
                             .map(|_| Fan {
@@ -119,26 +126,74 @@ impl TTRiingQuad {
             .collect())
     }
 
+    pub fn find_controllers(
+        api: &HidApi,
+        ctrl_cfg: &[ControllerCfg],
+    ) -> Result<Vec<Box<dyn FanController>>> {
+        Ok(ctrl_cfg
+            .iter()
+            .filter_map(|cfg| {
+                if let ControllerCfg::RiingQuad { id, usb, fans } = cfg {
+                    Some(Box::new(TTRiingQuad(Arc::new(Mutex::new(Controller {
+                        name: format!("TTRiingQuad{}", id),
+                        dev: api.open(usb.vid, usb.pid).unwrap(),
+                        fans: fans
+                            .iter()
+                            .map(|fan| Fan {
+                                current_speed: 0,
+                                current_rpm: 0,
+                                active_curve: fan.active_curve.clone(),
+                                curve: fan
+                                    .curve
+                                    .iter()
+                                    .map(|c| ((c.0.clone()), FanCurve::from(c.1.clone())))
+                                    .collect(),
+                            })
+                            .collect(),
+                    })))) as Box<dyn FanController>)
+                } else {
+                    None
+                }
+            })
+            .collect())
+    }
+
     async fn process_fan(&self, idx: usize, temp: f32) -> Result<()> {
-        let guard = self.0.lock().await;
-        let speed = guard.fans[idx].compute_speed(temp)?;
-        info!("Processing fan {}: {}°C", idx + 1, temp);
-        let (ret_speed, rpm) = tokio::task::block_in_place(move || -> Result<(u8, u32)> {
-            let _ = guard.dev.write(&build_package((idx + 1) as u8, speed));
-
-            let mut buf = [0u8; 193];
-            let _ = guard.dev.read_timeout(&mut buf, READ_TIMEOUT);
-
-            let s = buf[0x04];
-            let rpm = ((buf[0x05] as u32) << 8) | buf[0x06] as u32;
-            Ok((s, rpm))
-        })?;
+        let speed = {
+            let guard = self.0.lock().await;
+            guard.fans[idx].compute_speed(temp)?
+        };
+        let ctrl = self.0.clone();
+        let (ret_speed, rpm) = tokio::task::spawn_blocking(move || {
+            let guard = ctrl.blocking_lock();
+            info!(
+                "Processing fan {} on controller {}: {}°C",
+                idx + 1,
+                guard.name,
+                temp
+            );
+            Self::proccess_fan_inner(guard, idx, speed)
+        })
+        .await?;
         self.0.lock().await.fans[idx].update_stats(ret_speed, rpm);
         Ok(())
     }
 
     async fn read(&self) -> MutexGuard<'_, Controller> {
         self.0.lock().await
+    }
+
+    #[inline(never)]
+    fn proccess_fan_inner(guard: MutexGuard<'_, Controller>, idx: usize, speed: u8) -> (u8, u32) {
+        let _ = guard.dev.write(&build_package((idx + 1) as u8, speed));
+
+        let mut buf = [0u8; 193];
+        let _ = guard.dev.read_timeout(&mut buf, READ_TIMEOUT);
+
+        let s = buf[0x04];
+        let rpm = ((buf[0x05] as u32) << 8) | buf[0x06] as u32;
+
+        (s, rpm)
     }
 }
 
@@ -184,7 +239,7 @@ impl Fan {
                 self.active_curve = curve.to_string();
                 Ok(())
             })
-            .ok_or(anyhow!("Curve not found"))?
+            .ok_or(anyhow!("Curve {curve} not found"))?
     }
 
     fn update_curve_data(&mut self, curve: &str, curve_data: &FanCurve) -> Result<()> {
