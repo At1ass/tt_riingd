@@ -1,100 +1,125 @@
 version: 1
-tick-seconds: 2                 # глобальный период опроса, c
+tick_seconds: 2
+enable_broadcast: false
+broadcast_interval: 1
 
 ################################################################################
-#  Контроллеры и их вентиляторы
+#  Controller configuration
 ################################################################################
 controllers:
-  - id: "pump"                  # логический идентификатор (используется в D-Bus)
-    kind: riing-quad            # enum ControllerCfg
-    usb:                        # как вы уже делаете
-      vid: 0x264A
-      pid: 0x232B
-    fans:                       # ЯВНО описываем каждый канал
-      - idx: 1                  # аппаратный номер (1‒5 для Riing Quad)
-        name: "CPU_FAN_PUSH"    # человекочитаемое имя (GUI)
-        active_curve: "step-curve"
-        curve:
-          step-curve:
-            id: "Hi"
-            kind: step-curve
-            tmps: [0.0, 100.0]
-            spds: [20, 100]
-          constant:
-            id: "Lo"
-            kind: constant
-            speed: 100
-      - idx: 2
-        name: "CPU_FAN_PULL"
-        active_curve: "constant"
-        curve:
-          constant:
-            id: "Hi"
-            kind: constant
-            speed: 60
-      - idx: 3
-        name: "GPU_FAN"
-        active_curve: "constant"
-        curve:
-          constant:
-            id: "Hi"
-            kind: constant
-            speed: 60
-  - id: "rad"
+  - id: "quad-1"
     kind: riing-quad
-    usb: { vid: 0x264A, pid: 0x232C, serial: "HQP2024060144" }
+    usb: { vid: 0x264A, pid: 0x232B }
     fans:
       - idx: 1
-        name: "RAD_TOP"
-        active_curve: "constant"
-        curve:
-          constant:
-            id: "Hi"
-            kind: constant
-            speed: 60
+        name: "GPU bottom"
+        active_curve: "GPUStepCurve"
+        curve: [ "GPUStepCurve", "GPUConstant" ]
       - idx: 2
-        name: "RAD_NE_TOP"
-        active_curve: "constant"
-        curve:
-          constant:
-            id: "Hi"
-            kind: constant
-            speed: 60
+        name: "CPU left"
+        active_curve: "CPUStepCurve"
+        curve: [ "CPUStepCurve", "CPUConstant" ]
       - idx: 3
-        name: "RAD_NE"
-        active_curve: "constant"
-        curve:
-          constant:
-            id: "Hi"
-            kind: constant
-            speed: 60
+        name: "CPU left"
+        active_curve: "CPUStepCurve"
+        curve: [ "CPUStepCurve", "CPUConstant" ]
+  - id: "quad-2"
+    kind: riing-quad
+    usb: { vid: 0x264A, pid: 0x232C }
+    fans:
+      - idx: 1
+        name: "CPU top"
+        active_curve: "CPUStepCurve"
+        curve: [ "CPUStepCurve", "CPUConstant" ]
+      - idx: 2
+        name: "CPU top"
+        active_curve: "CPUStepCurve"
+        curve: [ "CPUStepCurve", "CPUConstant" ]
+      - idx: 3
+        name: "CPU top"
+        active_curve: "CPUStepCurve"
+        curve: [ "CPUStepCurve", "CPUConstant" ]
+  - id: "quad-3"
+    kind: riing-quad
+    usb: { vid: 0x264A, pid: 0x232D }
+    fans:
+      - idx: 1
+        name: "CPU right"
+        active_curve: "CPUStepCurve"
+        curve: [ "CPUStepCurve", "CPUConstant" ]
+      - idx: 2
+        name: "CPU right"
+        active_curve: "CPUStepCurve"
+        curve: [ "CPUStepCurve", "CPUConstant" ]
+      - idx: 3
+        name: "GPU right"
+        active_curve: "GPUStepCurve"
+        curve: [ "GPUStepCurve", "GPUConstant" ]
+  - id: "quad-4"
+    kind: riing-quad
+    usb: { vid: 0x264A, pid: 0x232E }
+    fans:
+      - idx: 1
+        name: "GPU right"
+        active_curve: "GPUStepCurve"
+        curve: [ "GPUStepCurve", "GPUConstant" ]
+      - idx: 2
+        name: "GPU bottom"
+        active_curve: "GPUStepCurve"
+        curve: [ "GPUStepCurve", "GPUConstant" ]
+      - idx: 3
+        name: "GPU bottom"
+        active_curve: "GPUStepCurve"
+        curve: [ "GPUStepCurve", "GPUConstant" ]
 
 ################################################################################
-#  Сенсоры температуры
+#  Curve library
+################################################################################
+curves:
+  - id: "GPUStepCurve"
+    kind: step-curve
+    tmps: [0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0]
+    spds: [20, 20, 23, 28, 32, 35, 37, 43, 50, 66, 100]
+  - id: "GPUConstant"
+    speed: 40
+  - id: "CPUStepCurve"
+    kind: step-curve
+    tmps: [0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0]
+    spds: [20, 20, 26, 32, 37, 40, 42, 51, 62, 80, 100]
+  - id: "CPUConstant"
+    speed: 60
+################################################################################
+#  Sensors settings
 ################################################################################
 sensors:
-  - id: "cpu_pkg"
+  - id: "cpu_temp"
     kind: lm-sensors
     chip: "nct6687-isa-0a20"
     feature: "temp1"
 
-  - id: "gpu_core"
+  - id: "gpu_temp"
     kind: lm-sensors
     chip: "mt7921_phy0-pci-0d00"
     feature: "temp1"
 
 ################################################################################
-#  Сопоставление: какой сенсор «драйвит» какой вентилятор
+#  sensor <-> fan mapping
 ################################################################################
 mappings:
-  - sensor: "cpu_pkg"
+  - sensor: "cpu_temp"
     targets:
-      - { controller: 1, fan_idx: 1 }
       - { controller: 1, fan_idx: 2 }
       - { controller: 1, fan_idx: 3 }
-
-  - sensor: "gpu_core"
-    targets:
+      - { controller: 2, fan_idx: 1 }
+      - { controller: 2, fan_idx: 2 }
       - { controller: 2, fan_idx: 3 }
-      - { controller: 2,  fan_idx: 2 }
-      - { controller: 2,  fan_idx: 1 }
+      - { controller: 3, fan_idx: 1 }
+      - { controller: 3, fan_idx: 2 }
+
+  - sensor: "gpu_temp"
+    targets:
+      - { controller: 1, fan_idx: 1 }
+      - { controller: 3, fan_idx: 3 }
+      - { controller: 4, fan_idx: 1 }
+      - { controller: 4, fan_idx: 2 }
+      - { controller: 4, fan_idx: 3 }

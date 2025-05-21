@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use event_listener::Event;
 use log::error;
 use serde_json::from_str;
@@ -18,6 +20,12 @@ pub struct DBusInterface {
 impl DBusInterface {
     #[zbus(signal)]
     async fn stopped(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn temperature_changed(
+        emitter: &SignalEmitter<'_>,
+        sensor_data: HashMap<String, f32>,
+    ) -> zbus::Result<()>;
 
     async fn stop(
         &self,

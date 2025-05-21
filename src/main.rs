@@ -9,7 +9,7 @@ mod mappings;
 mod sensors;
 mod temperature_sensors;
 
-use std::{fs::File, path::PathBuf, sync::Arc, time::Duration};
+use std::{collections::HashMap, fs::File, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Result, anyhow};
 use clap::Parser;
@@ -21,11 +21,11 @@ use once_cell::sync::Lazy;
 use sensors::TemperatureSensor;
 use syslog::{BasicLogger, Facility, Formatter3164};
 use temperature_sensors::lm_sensor;
-use tokio::{task::JoinHandle, time::interval};
+use tokio::{sync::RwLock, task::JoinHandle, time::interval};
 use tokio_stream::{StreamExt, wrappers::IntervalStream};
 use zbus::connection;
 
-use interface::DBusInterface;
+use interface::{DBusInterface, DBusInterfaceSignals};
 
 pub struct AppContext {
     pub cfg: config::Config,
@@ -76,6 +76,7 @@ fn into_daemon() -> Result<()> {
 }
 
 fn spawn_monitoring_task(
+    sensors_data: Arc<RwLock<HashMap<String, f32>>>,
     tick_seconds: u64,
     controllers: controller::Controllers,
     sensors: Vec<Box<dyn TemperatureSensor>>,
@@ -93,6 +94,7 @@ fn spawn_monitoring_task(
                             let Some(name) = sensor.sensor_name().await else {
                                 continue;
                             };
+                            sensors_data.write().await.insert(name.clone(), t);
                             info!("Temperature of {name}: {t}°C");
                             for fan in mapping.fans_for_sensor(&name) {
                                 if let Err(e) = controllers
@@ -107,6 +109,44 @@ fn spawn_monitoring_task(
                     }
                 }
                 info!("[timer] tick");
+            }
+        }
+    })
+}
+
+fn spawn_broadcast_task(
+    connection: zbus::Connection,
+    sensors_data: Arc<RwLock<HashMap<String, f32>>>,
+    broadcast_tick: u64,
+) -> JoinHandle<()> {
+    info!("Starting broadcast task with interval {broadcast_tick}");
+    tokio::spawn({
+        let mut interval_stream =
+            IntervalStream::new(interval(Duration::from_secs(broadcast_tick)));
+        let mut cache: HashMap<String, f32> = HashMap::new();
+        async move {
+            while interval_stream.next().await.is_some() {
+                if let Ok(interface) = connection
+                    .object_server()
+                    .interface("/io/github/tt_riingd")
+                    .await
+                {
+                    let snapshot = sensors_data.read().await.clone();
+                    if (!(snapshot
+                        .iter()
+                        .any(|(s, t)| (t - cache.get(s).unwrap_or(t)).abs() >= 0.2))
+                        && !cache.is_empty())
+                        || snapshot.is_empty()
+                    {
+                        continue;
+                    }
+
+                    let _ = interface.temperature_changed(snapshot.clone()).await;
+                    cache = snapshot;
+                } else {
+                    error!("Failed to get object server interface");
+                    continue;
+                }
             }
         }
     })
@@ -131,6 +171,10 @@ async fn init_context(config_path: Option<PathBuf>) -> Result<AppContext> {
 
 #[tokio::main]
 async fn tokio_main(config_path: Option<PathBuf>) -> Result<()> {
+    #[cfg(feature = "tokio-console")]
+    {
+        console_subscriber::init();
+    }
     let AppContext {
         cfg,
         controllers,
@@ -141,27 +185,40 @@ async fn tokio_main(config_path: Option<PathBuf>) -> Result<()> {
     // First set
     controllers.send_init().await?;
 
-    let _timer = spawn_monitoring_task(
-        cfg.tick_seconds as u64,
-        controllers.clone(),
-        sensors,
-        mapping,
-    );
-
     let stop = event_listener::Event::new();
     let stop_listener = stop.listen();
-    let _conn = connection::Builder::session()?
+
+    let conn = connection::Builder::session()?
         .name("io.github.tt_riingd")?
         .serve_at(
             "/io/github/tt_riingd",
             DBusInterface {
-                controllers,
+                controllers: controllers.clone(),
                 stop,
                 version: cfg.version.to_string(),
             },
         )?
         .build()
         .await?;
+
+    let sensors_data = Arc::new(RwLock::new(HashMap::new()));
+    let _timer = spawn_monitoring_task(
+        sensors_data.clone(),
+        cfg.tick_seconds as u64,
+        controllers,
+        sensors,
+        mapping,
+    );
+
+    let _broadcast = if cfg.enable_broadcast {
+        Some(spawn_broadcast_task(
+            conn.clone(),
+            sensors_data.clone(),
+            cfg.broadcast_interval as u64,
+        ))
+    } else {
+        None
+    };
 
     stop_listener.wait();
     info!("Stopped");

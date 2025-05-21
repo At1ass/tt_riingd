@@ -1,8 +1,10 @@
+use crate::config::{Config, CurveCfg};
 use crate::fan_curve::FanCurve;
 use crate::{config::ControllerCfg, fan_controller::FanController};
+use std::ops::Deref;
 use std::{collections::HashMap, sync::Arc};
 
-use anyhow::{Ok, Result, anyhow};
+use anyhow::{Context, Ok, Result, anyhow};
 use async_trait::async_trait;
 use hidapi::{HidApi, HidDevice};
 use log::info;
@@ -110,7 +112,7 @@ impl TTRiingQuad {
             .filter_map(|(idx, d)| {
                 api.open(d.vendor_id(), d.product_id()).ok().map(|device| {
                     Box::new(TTRiingQuad(Arc::new(Mutex::new(Controller {
-                        name: format!("TTRiingQuad{}", idx + 1),
+                        name: format!("TTRiingQuad: {}", idx + 1),
                         dev: device,
                         fans: (0..5)
                             .map(|_| Fan {
@@ -126,9 +128,11 @@ impl TTRiingQuad {
             .collect())
     }
 
+    #[allow(irrefutable_let_patterns)]
     pub fn find_controllers(
         api: &HidApi,
         ctrl_cfg: &[ControllerCfg],
+        curve_map: &HashMap<String, FanCurve>,
     ) -> Result<Vec<Box<dyn FanController>>> {
         Ok(ctrl_cfg
             .iter()
@@ -146,7 +150,12 @@ impl TTRiingQuad {
                                 curve: fan
                                     .curve
                                     .iter()
-                                    .map(|c| ((c.0.clone()), FanCurve::from(c.1.clone())))
+                                    .filter_map(|curve_str| {
+                                        curve_map
+                                            .get(curve_str)
+                                            .inspect(|_| info!("Matched: {curve_str}"))
+                                            .map(|curve| (curve_str.clone(), curve.clone()))
+                                    })
                                     .collect(),
                             })
                             .collect(),
@@ -163,6 +172,7 @@ impl TTRiingQuad {
             let guard = self.0.lock().await;
             guard.fans[idx].compute_speed(temp)?
         };
+        info!("Computed speed for fan {}: {}", idx + 1, speed);
         let ctrl = self.0.clone();
         let (ret_speed, rpm) = tokio::task::spawn_blocking(move || {
             let guard = ctrl.blocking_lock();

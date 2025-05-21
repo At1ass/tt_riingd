@@ -1,5 +1,6 @@
 use crate::fan_curve::Point;
 use anyhow::{Context, Result};
+use log::info;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, env, fs, path::{Path, PathBuf}};
 
@@ -8,9 +9,14 @@ pub struct Config {
     pub version: u8,
     #[serde(default = "defaults::tick_seconds")]
     pub tick_seconds: u16,
-
+    #[serde(default = "defaults::enable_broadcast")]
+    pub enable_broadcast: bool,
+    #[serde(default = "defaults::broadcast_interval")]
+    pub broadcast_interval: u16,
     #[serde(default)]
     pub controllers: Vec<ControllerCfg>,
+    #[serde(default)]
+    pub curves: Vec<CurveCfg>,
     #[serde(default)]
     pub sensors: Vec<SensorCfg>,
     #[serde(default)]
@@ -26,9 +32,6 @@ pub enum ControllerCfg {
         #[serde(default)]
         fans: Vec<FanCfg>,
     },
-    Dummy {
-        id: u8,
-    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,7 +39,8 @@ pub struct FanCfg {
     pub idx: u8,
     pub name: String,
     pub active_curve: String,
-    pub curve: HashMap<String, CurveCfg>,
+    // pub curve: HashMap<String, CurveCfg>,
+    pub curve: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +61,16 @@ pub enum CurveCfg {
     },
 }
 
+impl CurveCfg {
+    pub fn get_id(&self) -> String {
+        match self {
+            CurveCfg::Constant { id, .. } => id.clone(),
+            CurveCfg::StepCurve { id, .. } => id.clone(),
+            CurveCfg::Bezier { id, .. } => id.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MappingCfg {
     pub sensor: String,
@@ -71,6 +85,12 @@ pub struct FanTarget {
 
 mod defaults {
     pub fn tick_seconds() -> u16 {
+        2
+    }
+    pub fn enable_broadcast() -> bool {
+        false
+    }
+    pub fn broadcast_interval() -> u16 {
         2
     }
 }
@@ -90,9 +110,6 @@ pub enum SensorCfg {
         id: String,
         chip: String,
         feature: String,
-    },
-    Cpu {
-        id: String,
     },
 }
 
@@ -124,6 +141,7 @@ fn locate_config() -> Result<PathBuf> {
 
 pub fn load(path: Option<PathBuf>) -> Result<Config> {
     let path = path.unwrap_or_else(|| locate_config().expect("Failed to load config"));
+    info!("Used config: {}", path.display());
     let txt = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let cfg: Config = serde_yaml::from_str(&txt).context("parse YAML")?;
     if cfg.version != 1 {

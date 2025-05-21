@@ -25,6 +25,7 @@ unsafe impl Sync for Sensor {}
 pub struct LmSensorSource(Arc<Mutex<Sensor>>);
 
 impl LmSensorSource {
+    #[allow(unreachable_patterns)]
     pub fn discover(
         lmsensors: &'static LMSensors,
         cfg: &[SensorCfg],
