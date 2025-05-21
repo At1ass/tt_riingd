@@ -98,7 +98,10 @@ fn spawn_monitoring_task(
                                 continue;
                             };
                             sensors_data.write().await.insert(name.clone(), t);
-                            info!("Temperature of {name}: {t}°C");
+                            #[cfg(debug_assertions)]
+                            {
+                                info!("Temperature of {name}: {t}°C");
+                            }
                             for fan in mapping.fans_for_sensor(&name) {
                                 if let Err(e) = controllers
                                     .update_channel(fan.controller_id as u8, fan.channel as u8, t)
@@ -111,7 +114,10 @@ fn spawn_monitoring_task(
                         Err(e) => error!("Temperature read error: {e}"),
                     }
                 }
-                info!("[timer] tick");
+                #[cfg(debug_assertions)]
+                {
+                    info!("[timer] tick");
+                }
             }
         }
     })
@@ -122,7 +128,11 @@ fn spawn_broadcast_task(
     sensors_data: Arc<RwLock<HashMap<String, f32>>>,
     broadcast_tick: u64,
 ) -> JoinHandle<()> {
-    info!("Starting broadcast task with interval {broadcast_tick}");
+    #[cfg(debug_assertions)]
+    {
+        info!("Starting broadcast task with interval {broadcast_tick}");
+    }
+
     tokio::spawn({
         let mut interval_stream =
             IntervalStream::new(interval(Duration::from_secs(broadcast_tick)));
@@ -150,7 +160,10 @@ fn spawn_broadcast_task(
                     error!("Failed to get object server interface");
                     continue;
                 }
-                info!("[Color] tick");
+                #[cfg(debug_assertions)]
+                {
+                    info!("[timer] tick");
+                }
             }
         }
     })
@@ -172,19 +185,20 @@ fn spawn_color_task(
                             .iter()
                             .find(|&c| c.color == *entry.key())
                             .map(|finded| (finded, entry.value().clone()))
-                    }).collect();
+                    })
+                    .collect();
                 for (cfg, fans) in map {
                     for fan in fans {
                         let value = controllers.clone();
                         let _ = value
-                           .update_channel_color(
+                            .update_channel_color(
                                 fan.controller_id as u8,
                                 fan.channel as u8,
                                 cfg.rgb[0],
                                 cfg.rgb[1],
                                 cfg.rgb[2],
                             )
-                           .await;
+                            .await;
                     }
                 }
             }
@@ -197,7 +211,10 @@ async fn init_context(config_path: Option<PathBuf>) -> Result<AppContext> {
     let controllers = controller::Controllers::init_from_cfg(&config)?;
     let sensors = lm_sensor::LmSensorSource::discover(&LMSENSORS.0, &config.sensors)?;
 
-    info!("Loaded {} temperature sensors", sensors.len());
+    #[cfg(debug_assertions)]
+    {
+        info!("Loaded {} temperature sensors", sensors.len());
+    }
 
     let mapping = Arc::new(Mapping::load_mappings(&config.mappings));
     let colors = Arc::new(config.colors.clone());

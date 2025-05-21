@@ -24,6 +24,7 @@ struct Fan {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct Controller {
     name: String,
     dev: HidDevice,
@@ -36,7 +37,10 @@ pub struct TTRiingQuad(Arc<Mutex<Controller>>);
 #[async_trait]
 impl FanController for TTRiingQuad {
     async fn send_init(&self) -> Result<()> {
-        info!("Initializing TTRiingQuad controller");
+        #[cfg(debug_assertions)]
+        {
+            info!("Initializing TTRiingQuad controller");
+        }
         self.read()
             .await
             .dev
@@ -46,7 +50,10 @@ impl FanController for TTRiingQuad {
     }
 
     async fn update_speeds(&self, temp: f32) -> Result<()> {
-        info!("Updating speeds for TTRiingQuad controller");
+        #[cfg(debug_assertions)]
+        {
+            info!("Updating speeds for TTRiingQuad controller");
+        }
         for idx in 0..5 {
             self.process_fan(idx, temp).await?;
         }
@@ -57,15 +64,18 @@ impl FanController for TTRiingQuad {
         self.process_fan((channel - 1) as usize, temp).await
     }
 
-    async fn update_channel_color(&self, channel: u8, red:u8, green: u8, blue: u8) -> Result<()> {
+    async fn update_channel_color(&self, channel: u8, red: u8, green: u8, blue: u8) -> Result<()> {
         self.process_fan_color((channel - 1) as usize, green, red, blue)
             .await
     }
     async fn switch_curve(&self, channel: u8, curve: &str) -> Result<()> {
-        info!(
-            "Switching curve for TTRiingQuad controller on channel {}",
-            channel
-        );
+        #[cfg(debug_assertions)]
+        {
+            info!(
+                "Switching curve for TTRiingQuad controller on channel {}",
+                channel
+            );
+        }
         self.read()
             .await
             .fans
@@ -75,10 +85,13 @@ impl FanController for TTRiingQuad {
     }
 
     async fn get_active_curve(&self, channel: u8) -> Result<String> {
-        info!(
-            "Getting active curve for TTRiingQuad controller on channel {}",
-            channel
-        );
+        #[cfg(debug_assertions)]
+        {
+            info!(
+                "Getting active curve for TTRiingQuad controller on channel {}",
+                channel
+            );
+        }
         self.read()
             .await
             .fans
@@ -93,10 +106,13 @@ impl FanController for TTRiingQuad {
         curve: &str,
         curve_data: &FanCurve,
     ) -> Result<()> {
-        info!(
-            "Updating curve data for TTRiingQuad controller on channel {}",
-            channel
-        );
+        #[cfg(debug_assertions)]
+        {
+            info!(
+                "Updating curve data for TTRiingQuad controller on channel {}",
+                channel
+            );
+        }
         self.read()
             .await
             .fans
@@ -176,16 +192,22 @@ impl TTRiingQuad {
             let guard = self.0.lock().await;
             guard.fans[idx].compute_speed(temp)?
         };
-        info!("Computed speed for fan {}: {}", idx + 1, speed);
+        #[cfg(debug_assertions)]
+        {
+            info!("Computed speed for fan {}: {}", idx + 1, speed);
+        }
         let ctrl = self.0.clone();
         let (ret_speed, rpm) = tokio::task::spawn_blocking(move || {
             let guard = ctrl.blocking_lock();
-            info!(
-                "Processing fan {} on controller {}: {}°C",
-                idx + 1,
-                guard.name,
-                temp
-            );
+            #[cfg(debug_assertions)]
+            {
+                info!(
+                    "Processing fan {} on controller {}: {}°C",
+                    idx + 1,
+                    guard.name,
+                    temp
+                );
+            }
             Self::proccess_fan_inner(guard, idx, speed)
         })
         .await?;
@@ -197,7 +219,10 @@ impl TTRiingQuad {
         let ctrl = self.0.clone();
         tokio::task::spawn_blocking(move || {
             let guard = ctrl.blocking_lock();
-            info!("Setting color fan {} on controller {}", idx + 1, guard.name,);
+            #[cfg(debug_assertions)]
+            {
+                info!("Setting color fan {} on controller {}", idx + 1, guard.name,);
+            }
             Self::proccess_fan_inner_color(guard, idx, green, red, blue)
         })
         .await?
@@ -261,8 +286,8 @@ impl Fan {
                     }
                 })
                 .ok_or(anyhow!("Temperature not found in curve")),
-            FanCurve::BezierCurve { points} => {
-                if points.len()!= 4 {
+            FanCurve::BezierCurve { points } => {
+                if points.len() != 4 {
                     Err(anyhow!("Bezier curve must have 4 points"))
                 } else {
                     Ok(get_speed_for_temp(&points[0..4], temp) as u8)
@@ -291,8 +316,11 @@ impl Fan {
             .get_mut(curve)
             .filter(|c| c == &curve_data)
             .map(|c| {
-                info!("Disc c: {c:?}");
-                info!("Disc curve_data: {c:?}");
+                #[cfg(debug_assertions)]
+                {
+                    info!("Disc c: {c:?}");
+                    info!("Disc curve_data: {c:?}");
+                }
 
                 *c = curve_data.clone();
             })
@@ -316,7 +344,10 @@ pub fn build_color_package(channel: u8, green: u8, red: u8, blue: u8) -> [u8; 19
         package[(0x05 + i)..(0x05 + i + 3)].copy_from_slice(&[green, red, blue]);
     }
 
-    info!("Built color package: {:?}", package);
+    #[cfg(debug_assertions)]
+    {
+        info!("Built color package: {:?}", package);
+    }
 
     package
 }
@@ -353,24 +384,18 @@ fn compute_bezier_at_t(pts: &[Point], t: f32) -> Point {
     let uuu = uu * u;
     let ttt = tt * t;
 
-    let x = uuu * pts[0].x
-          + 3.0 * uu  * t  * pts[1].x
-          + 3.0 * u   * tt * pts[2].x
-          + ttt       * pts[3].x;
+    let x = uuu * pts[0].x + 3.0 * uu * t * pts[1].x + 3.0 * u * tt * pts[2].x + ttt * pts[3].x;
 
-    let y = uuu * pts[0].y
-          + 3.0 * uu  * t  * pts[1].y
-          + 3.0 * u   * tt * pts[2].y
-          + ttt       * pts[3].y;
+    let y = uuu * pts[0].y + 3.0 * uu * t * pts[1].y + 3.0 * u * tt * pts[2].y + ttt * pts[3].y;
 
     (x, y).into()
 }
 
 /// Ищет `y` по заданной `temp` (т.е. по `x`) на кривой Безье
 pub fn get_speed_for_temp(pts: &[Point], temp: f32) -> f32 {
-    let mut t_low  = 0.0_f32;
+    let mut t_low = 0.0_f32;
     let mut t_high = 1.0_f32;
-    let mut t_mid  = 0.0_f32;
+    let mut t_mid = 0.0_f32;
 
     for _ in 0..MAX_ITERATIONS {
         t_mid = (t_low + t_high) * 0.5;

@@ -6,6 +6,7 @@ use lm_sensors::{
     LMSensors, SubFeatureRef,
     value::{Kind as ValueKind, Value},
 };
+#[cfg(debug_assertions)]
 use log::info;
 use tokio::sync::Mutex;
 
@@ -34,7 +35,10 @@ impl LmSensorSource {
             .iter()
             .filter_map(|c| match c {
                 SensorCfg::LmSensors { id, chip, feature } => {
-                    info!("Discovering LM sensor: chip={}, feature={}", chip, feature);
+                    #[cfg(debug_assertions)]
+                    {
+                        info!("Discovering LM sensor: chip={}, feature={}", chip, feature);
+                    }
                     let chip_ref = lmsensors
                         .chip_iter(None)
                         .find(|c| c.name().map(|n| n == *chip).unwrap_or(false))?;
@@ -48,12 +52,14 @@ impl LmSensorSource {
                         .sub_feature_iter()
                         .find(|s| matches!(s.kind(), Some(ValueKind::TemperatureInput)))?;
 
-                    let chip_name = chip_ref.name().unwrap();
-                    let chip_bus = chip_ref.bus();
-                    let feat_name = feat_ref.name()?.unwrap();
-                    let sensor_key = format!("lm:{chip_name}@{chip_bus}:{feat_name}");
-
-                    info!("Found LM sensor: {sensor_key}");
+                    #[cfg(debug_assertions)]
+                    {
+                        let chip_name = chip_ref.name().unwrap();
+                        let chip_bus = chip_ref.bus();
+                        let feat_name = feat_ref.name()?.unwrap();
+                        let sensor_key = format!("lm:{chip_name}@{chip_bus}:{feat_name}");
+                        info!("Found LM sensor: {sensor_key}");
+                    }
 
                     Some(Box::new(LmSensorSource(Arc::new(Mutex::new(Sensor {
                         key: id.to_string(),
