@@ -1,10 +1,8 @@
-use crate::config::{Config, CurveCfg};
 use crate::fan_curve::FanCurve;
 use crate::{config::ControllerCfg, fan_controller::FanController};
-use std::ops::Deref;
 use std::{collections::HashMap, sync::Arc};
 
-use anyhow::{Context, Ok, Result, anyhow};
+use anyhow::{Ok, Result, anyhow};
 use async_trait::async_trait;
 use hidapi::{HidApi, HidDevice};
 use log::info;
@@ -57,6 +55,10 @@ impl FanController for TTRiingQuad {
         self.process_fan((channel - 1) as usize, temp).await
     }
 
+    async fn update_channel_color(&self, channel: u8, red:u8, green: u8, blue: u8) -> Result<()> {
+        self.process_fan_color((channel - 1) as usize, green, red, blue)
+            .await
+    }
     async fn switch_curve(&self, channel: u8, curve: &str) -> Result<()> {
         info!(
             "Switching curve for TTRiingQuad controller on channel {}",
@@ -189,6 +191,15 @@ impl TTRiingQuad {
         Ok(())
     }
 
+    async fn process_fan_color(&self, idx: usize, green: u8, red: u8, blue: u8) -> Result<()> {
+        let ctrl = self.0.clone();
+        tokio::task::spawn_blocking(move || {
+            let guard = ctrl.blocking_lock();
+            info!("Setting color fan {} on controller {}", idx + 1, guard.name,);
+            Self::proccess_fan_inner_color(guard, idx, green, red, blue)
+        })
+        .await?
+    }
     async fn read(&self) -> MutexGuard<'_, Controller> {
         self.0.lock().await
     }
@@ -204,6 +215,24 @@ impl TTRiingQuad {
         let rpm = ((buf[0x05] as u32) << 8) | buf[0x06] as u32;
 
         (s, rpm)
+    }
+
+    #[inline(never)]
+    fn proccess_fan_inner_color(
+        guard: MutexGuard<'_, Controller>,
+        idx: usize,
+        green: u8,
+        red: u8,
+        blue: u8,
+    ) -> Result<()> {
+        let _ = guard
+            .dev
+            .write(&build_color_package((idx + 1) as u8, green, red, blue));
+
+        let mut buf = [0u8; 193];
+        let _ = guard.dev.read_timeout(&mut buf, READ_TIMEOUT);
+
+        Ok(())
     }
 }
 
@@ -272,6 +301,19 @@ impl Fan {
 
 pub fn build_package(channel: u8, value: u8) -> [u8; 6] {
     [0x00, 0x32, 0x51, channel, 0x01, value]
+}
+
+pub fn build_color_package(channel: u8, green: u8, red: u8, blue: u8) -> [u8; 193] {
+    let mut package = [0u8; 193];
+
+    package[0x00..=0x04].copy_from_slice(&[0x00, 0x32, 0x52, channel, 0x24]);
+    for i in (0..52).step_by(3) {
+        package[(0x05 + i)..(0x05 + i + 3)].copy_from_slice(&[green, red, blue]);
+    }
+
+    info!("Built color package: {:?}", package);
+
+    package
 }
 
 fn build_default_curves() -> HashMap<String, FanCurve> {

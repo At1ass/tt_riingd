@@ -13,10 +13,11 @@ use std::{collections::HashMap, fs::File, path::PathBuf, sync::Arc, time::Durati
 
 use anyhow::{Result, anyhow};
 use clap::Parser;
+use config::ColorCfg;
 use daemonize::Daemonize;
 use event_listener::Listener;
 use log::{LevelFilter, error, info};
-use mappings::Mapping;
+use mappings::{ColorMapping, Mapping};
 use once_cell::sync::Lazy;
 use sensors::TemperatureSensor;
 use syslog::{BasicLogger, Facility, Formatter3164};
@@ -32,6 +33,8 @@ pub struct AppContext {
     pub controllers: controller::Controllers,
     pub sensors: Vec<Box<dyn TemperatureSensor>>,
     pub mapping: Arc<Mapping>,
+    pub colors: Arc<Vec<ColorCfg>>,
+    pub color_mappings: Arc<ColorMapping>,
 }
 
 pub struct LMSensorsRef(pub lm_sensors::LMSensors);
@@ -147,6 +150,43 @@ fn spawn_broadcast_task(
                     error!("Failed to get object server interface");
                     continue;
                 }
+                info!("[Color] tick");
+            }
+        }
+    })
+}
+
+fn spawn_color_task(
+    controllers: controller::Controllers,
+    color_map: Arc<ColorMapping>,
+    colors: Arc<Vec<ColorCfg>>,
+) -> JoinHandle<()> {
+    tokio::spawn({
+        let mut interval_stream = IntervalStream::new(interval(Duration::from_secs(3)));
+        async move {
+            while interval_stream.next().await.is_some() {
+                let map: Vec<_> = color_map
+                    .iter()
+                    .filter_map(|entry| {
+                        colors
+                            .iter()
+                            .find(|&c| c.color == *entry.key())
+                            .map(|finded| (finded, entry.value().clone()))
+                    }).collect();
+                for (cfg, fans) in map {
+                    for fan in fans {
+                        let value = controllers.clone();
+                        let _ = value
+                           .update_channel_color(
+                                fan.controller_id as u8,
+                                fan.channel as u8,
+                                cfg.rgb[0],
+                                cfg.rgb[1],
+                                cfg.rgb[2],
+                            )
+                           .await;
+                    }
+                }
             }
         }
     })
@@ -160,12 +200,16 @@ async fn init_context(config_path: Option<PathBuf>) -> Result<AppContext> {
     info!("Loaded {} temperature sensors", sensors.len());
 
     let mapping = Arc::new(Mapping::load_mappings(&config.mappings));
+    let colors = Arc::new(config.colors.clone());
+    let color_mappings = Arc::new(ColorMapping::build_color_mapping(&config.color_mappings));
 
     Ok(AppContext {
         cfg: config,
         controllers,
         sensors,
         mapping,
+        colors,
+        color_mappings,
     })
 }
 
@@ -180,6 +224,8 @@ async fn tokio_main(config_path: Option<PathBuf>) -> Result<()> {
         controllers,
         sensors,
         mapping,
+        colors,
+        color_mappings,
     } = init_context(config_path).await?;
 
     // First set
@@ -200,6 +246,8 @@ async fn tokio_main(config_path: Option<PathBuf>) -> Result<()> {
         )?
         .build()
         .await?;
+
+    let _color = spawn_color_task(controllers.clone(), color_mappings.clone(), colors.clone());
 
     let sensors_data = Arc::new(RwLock::new(HashMap::new()));
     let _timer = spawn_monitoring_task(

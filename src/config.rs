@@ -2,7 +2,7 @@ use crate::fan_curve::Point;
 use anyhow::{Context, Result};
 use log::info;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, env, fs, path::{Path, PathBuf}};
+use std::{env, fs, path::{Path, PathBuf}};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -21,6 +21,10 @@ pub struct Config {
     pub sensors: Vec<SensorCfg>,
     #[serde(default)]
     pub mappings: Vec<MappingCfg>,
+    #[serde(default)]
+    pub colors: Vec<ColorCfg>,
+    #[serde(default)]
+    pub color_mappings: Vec<ColorMappingCfg>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,6 +82,12 @@ pub struct MappingCfg {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ColorMappingCfg {
+    pub color: String,
+    pub targets: Vec<FanTarget>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FanTarget {
     pub controller: u8,
     pub fan_idx: u8,
@@ -111,6 +121,12 @@ pub enum SensorCfg {
         chip: String,
         feature: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ColorCfg {
+    pub color: String,
+    pub rgb: [u8;3],
 }
 
 fn locate_config() -> Result<PathBuf> {

@@ -81,12 +81,14 @@ curves:
     tmps: [0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0]
     spds: [20, 20, 23, 28, 32, 35, 37, 43, 50, 66, 100]
   - id: "GPUConstant"
+    kind: constant
     speed: 40
   - id: "CPUStepCurve"
     kind: step-curve
     tmps: [0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0]
     spds: [20, 20, 26, 32, 37, 40, 42, 51, 62, 80, 100]
   - id: "CPUConstant"
+    kind: constant
     speed: 60
 ################################################################################
 #  Sensors settings
@@ -102,6 +104,21 @@ sensors:
     chip: "mt7921_phy0-pci-0d00"
     feature: "temp1"
 
+################################################################################
+#  Colors
+################################################################################
+colors:
+  - color: "red"
+    rgb: [255, 0, 0]
+
+  - color: "green"
+    rgb: [0, 255, 0]
+
+  - color: "blue"
+    rgb: [0, 0, 255]
+
+  - color: "yellow"
+    rgb: [255, 255, 0]
 ################################################################################
 #  sensor <-> fan mapping
 ################################################################################
@@ -119,6 +136,24 @@ mappings:
   - sensor: "gpu_temp"
     targets:
       - { controller: 1, fan_idx: 1 }
+      - { controller: 3, fan_idx: 3 }
+      - { controller: 4, fan_idx: 1 }
+      - { controller: 4, fan_idx: 2 }
+      - { controller: 4, fan_idx: 3 }
+################################################################################
+#  color <-> fan mapping
+################################################################################
+color_mappings:
+  - color: "blue"
+    targets:
+      - { controller: 1, fan_idx: 1 }
+      - { controller: 1, fan_idx: 2 }
+      - { controller: 1, fan_idx: 3 }
+      - { controller: 2, fan_idx: 1 }
+      - { controller: 2, fan_idx: 2 }
+      - { controller: 2, fan_idx: 3 }
+      - { controller: 3, fan_idx: 1 }
+      - { controller: 3, fan_idx: 2 }
       - { controller: 3, fan_idx: 3 }
       - { controller: 4, fan_idx: 1 }
       - { controller: 4, fan_idx: 2 }

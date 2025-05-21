@@ -24,7 +24,8 @@ impl Controllers {
     pub fn init_from_cfg(cfg: &Config) -> Result<Self> {
         let api = HidApi::new()?;
         let mut controllers = Vec::<Box<dyn FanController>>::new();
-        let curve_map: HashMap<String, FanCurve> = cfg.curves
+        let curve_map: HashMap<String, FanCurve> = cfg
+            .curves
             .iter()
             .map(|c| (c.get_id(), FanCurve::from(c)))
             .collect();
@@ -32,7 +33,7 @@ impl Controllers {
         controllers.extend(drivers::tt_riing_quad::TTRiingQuad::find_controllers(
             &api,
             &cfg.controllers,
-            &curve_map
+            &curve_map,
         )?);
 
         Ok(Self(Arc::new(controllers)))
@@ -57,6 +58,19 @@ impl Controllers {
     pub async fn update_channel(&self, controller: u8, channel: u8, temp: f32) -> Result<()> {
         self.get_device(controller)?
             .update_channel(channel, temp)
+            .await
+    }
+
+    pub async fn update_channel_color(
+        &self,
+        controller: u8,
+        channel: u8,
+        red: u8,
+        green: u8,
+        blue: u8,
+    ) -> Result<()> {
+        self.get_device(controller)?
+            .update_channel_color(channel, red, green, blue)
             .await
     }
 
