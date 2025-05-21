@@ -4,8 +4,8 @@ use crate::config::CurveCfg;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Point {
-    x: f32,
-    y: f32,
+    pub x: f32,
+    pub y: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

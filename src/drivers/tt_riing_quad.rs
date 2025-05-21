@@ -1,4 +1,4 @@
-use crate::fan_curve::FanCurve;
+use crate::fan_curve::{FanCurve, Point};
 use crate::{config::ControllerCfg, fan_controller::FanController};
 use std::{collections::HashMap, sync::Arc};
 
@@ -12,6 +12,8 @@ pub const VID: u16 = 0x264A; // Thermaltake
 pub const DEFAULT_PERCENT: u8 = 50;
 pub const INIT_PACKET: [u8; 3] = [0x00, 0xFE, 0x33];
 pub const READ_TIMEOUT: i32 = 250;
+const MAX_ITERATIONS: usize = 100;
+const EPSILON: f32 = 1e-6;
 
 #[derive(Debug)]
 struct Fan {
@@ -259,9 +261,12 @@ impl Fan {
                     }
                 })
                 .ok_or(anyhow!("Temperature not found in curve")),
-            FanCurve::BezierCurve { points: _ } => {
-                // Implement Bezier curve interpolation
-                Err(anyhow!("Bezier curve interpolation not implemented"))
+            FanCurve::BezierCurve { points} => {
+                if points.len()!= 4 {
+                    Err(anyhow!("Bezier curve must have 4 points"))
+                } else {
+                    Ok(get_speed_for_temp(&points[0..4], temp) as u8)
+                }
             }
         }
     }
@@ -339,4 +344,49 @@ fn build_default_curves() -> HashMap<String, FanCurve> {
             },
         ),
     ])
+}
+
+fn compute_bezier_at_t(pts: &[Point], t: f32) -> Point {
+    let u = 1.0 - t;
+    let tt = t * t;
+    let uu = u * u;
+    let uuu = uu * u;
+    let ttt = tt * t;
+
+    let x = uuu * pts[0].x
+          + 3.0 * uu  * t  * pts[1].x
+          + 3.0 * u   * tt * pts[2].x
+          + ttt       * pts[3].x;
+
+    let y = uuu * pts[0].y
+          + 3.0 * uu  * t  * pts[1].y
+          + 3.0 * u   * tt * pts[2].y
+          + ttt       * pts[3].y;
+
+    (x, y).into()
+}
+
+/// Ищет `y` по заданной `temp` (т.е. по `x`) на кривой Безье
+pub fn get_speed_for_temp(pts: &[Point], temp: f32) -> f32 {
+    let mut t_low  = 0.0_f32;
+    let mut t_high = 1.0_f32;
+    let mut t_mid  = 0.0_f32;
+
+    for _ in 0..MAX_ITERATIONS {
+        t_mid = (t_low + t_high) * 0.5;
+        let p = compute_bezier_at_t(pts, t_mid);
+
+        if (p.x - temp).abs() < EPSILON {
+            return p.y;
+        }
+        if p.x < temp {
+            t_low = t_mid;
+        } else {
+            t_high = t_mid;
+        }
+    }
+
+    // по окончании итераций возвращаем последнее y
+    let p = compute_bezier_at_t(pts, t_mid);
+    p.y
 }
