@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use hidapi::{HidDevice, HidError};
 
 pub trait DeviceIO: Send + 'static {
@@ -22,4 +22,3 @@ impl DeviceIO for HidDevice {
         }
     }
 }
-

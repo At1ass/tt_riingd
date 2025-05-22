@@ -81,7 +81,6 @@ impl FanController for TTRiingQuad {
         self.read().await.get_firmware_version()
     }
 
-
     async fn update_curve_data(
         &self,
         channel: u8,
@@ -231,7 +230,7 @@ impl TTRiingQuad {
         red: u8,
         blue: u8,
     ) -> Result<()> {
-        guard.set_rgb((idx + 1) as u8, 0x24, vec!((green, red, blue); 52))
+        guard.set_rgb((idx + 1) as u8, 0x24, vec![(green, red, blue); 52])
     }
 }
 

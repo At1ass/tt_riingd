@@ -59,7 +59,10 @@ impl Response {
     pub fn parse(cmd: Command, buf: &[u8]) -> Result<Self> {
         match cmd {
             Command::Init | Command::SetSpeed { .. } | Command::SetRgb { .. } => {
-                let code = buf.get(2).copied().ok_or_else(|| anyhow!("Empty status. Buf: {:?}", buf))?;
+                let code = buf
+                    .get(2)
+                    .copied()
+                    .ok_or_else(|| anyhow!("Empty status. Buf: {:?}", buf))?;
                 Ok(Response::Status(code))
             }
             Command::GetFirmwareVersion => {

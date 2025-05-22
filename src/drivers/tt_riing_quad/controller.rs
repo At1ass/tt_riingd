@@ -1,11 +1,14 @@
-use std::collections::HashMap;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 #[cfg(debug_assertions)]
 use log::info;
+use std::collections::HashMap;
 
 use crate::fan_curve::{FanCurve, Point};
 
-use super::{device_io::DeviceIO, protocol::{Command, Response}};
+use super::{
+    device_io::DeviceIO,
+    protocol::{Command, Response},
+};
 
 pub const READ_TIMEOUT: i32 = 250;
 const MAX_ITERATIONS: usize = 100;

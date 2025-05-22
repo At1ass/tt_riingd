@@ -2,7 +2,10 @@ use crate::fan_curve::Point;
 use anyhow::{Context, Result};
 use log::info;
 use serde::{Deserialize, Serialize};
-use std::{env, fs, path::{Path, PathBuf}};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -126,30 +129,30 @@ pub enum SensorCfg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColorCfg {
     pub color: String,
-    pub rgb: [u8;3],
+    pub rgb: [u8; 3],
 }
 
 fn locate_config() -> Result<PathBuf> {
     // 2) ENV
     if let Ok(env_path) = env::var("TT_RIINGD_CONFIG") {
-        return Ok(PathBuf::from(env_path))
+        return Ok(PathBuf::from(env_path));
     }
 
     // 3) XDG_CONFIG_HOME или $HOME/.config
     if let Some(mut cfg_dir) = env::var_os("XDG_CONFIG_HOME")
-                                 .map(PathBuf::from)
-                                 .or_else(|| env::var_os("HOME")
-                                         .map(|h| Path::new(&h).join(".config"))) {
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|h| Path::new(&h).join(".config")))
+    {
         cfg_dir.push("tt_riingd/config.yml");
         if cfg_dir.exists() {
-            return Ok(cfg_dir.clone())
+            return Ok(cfg_dir.clone());
         }
     }
 
     // 4) /etc
     let etc = Path::new("/etc/tt_riingd/config.yml");
     if etc.exists() {
-        return Ok(etc.to_path_buf())
+        return Ok(etc.to_path_buf());
     }
 
     anyhow::bail!("файл конфигурации не найден ни в одном из стандартных мест")
