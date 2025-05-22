@@ -1,4 +1,4 @@
-use anyhow::{Result, Ok, anyhow};
+use anyhow::{Ok, Result, anyhow};
 use hidapi::{HidDevice, HidError};
 
 pub trait DeviceIO: Send + 'static {
@@ -28,8 +28,8 @@ mod tests {
     use crate::drivers::tt_riing_quad::controller::READ_TIMEOUT;
 
     use super::DeviceIO;
-    use std::sync::Mutex;
     use anyhow::Result;
+    use std::sync::Mutex;
 
     struct StubIo {
         written: Mutex<Vec<Vec<u8>>>,
@@ -64,11 +64,11 @@ mod tests {
     #[test]
     fn stub_io_cycle() {
         let stub = StubIo::new(vec![vec![0xAA]]);
-        let n = stub.write(&[1,2,3]).unwrap();
+        let n = stub.write(&[1, 2, 3]).unwrap();
         assert_eq!(n, 3);
-        let mut buf = [0u8;1];
+        let mut buf = [0u8; 1];
         stub.read(&mut buf, READ_TIMEOUT).unwrap();
         assert_eq!(buf[0], 0xAA);
-        assert_eq!(stub.written(), vec![vec![1,2,3]]);
+        assert_eq!(stub.written(), vec![vec![1, 2, 3]]);
     }
 }

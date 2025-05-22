@@ -258,5 +258,3 @@ fn build_default_curves() -> HashMap<String, FanCurve> {
         ),
     ])
 }
-
-
