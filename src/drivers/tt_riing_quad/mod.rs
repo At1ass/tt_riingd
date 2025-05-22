@@ -1,6 +1,6 @@
 mod controller;
 mod device_io;
 mod protocol;
-mod tt_riing_quad;
+mod ttriing_quad;
 
-pub use tt_riing_quad::TTRiingQuad;
+pub use ttriing_quad::TTRiingQuad;

@@ -40,7 +40,7 @@ impl ColorMapping {
             })
     }
 
-    pub fn iter<'a>(&'a self) -> dashmap::iter::Iter<'a, String, DashSet<FanRef>> {
+    pub fn iter(& self) -> dashmap::iter::Iter<String, DashSet<FanRef>> {
         self.color2fans.iter()
     }
 }
