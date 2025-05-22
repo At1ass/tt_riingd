@@ -1,72 +1,109 @@
 # tt-riingd
 
+[![CI](https://github.com/At1ass/tt_riingd/actions/workflows/ci.yml/badge.svg)](https://github.com/At1ass/tt_riingd/actions/workflows/ci.yml)  [![License](https://img.shields.io/badge/license-MIT-green.svg)](#license)
+
 `tt-riingd` is a lightweight Rust daemon for controlling Thermaltake Riing fans on Linux via HID and exposing a D-Bus interface.
 
-> [!NOTE]
-> The project is in early development (pre-alpha). Configuration support (curves, sensor integration) is planned for v0.4.
+> **Early development:** pre-alpha; full configuration support (curves, sensors) arrives in v0.4.
 
 ## Features
 
-* **Asynchronous, non-blocking I/O** powered by [Tokio](https://tokio.rs/)
-* **D-Bus API methods**:
+* **Asynchronous I/O** with [Tokio](https://tokio.rs/) for non-blocking device access.
+* **HID driver** for Thermaltake Riing controllers (PID 0x232B–0x232E).
+* **D-Bus interface** (bus name: `io.github.tt_riingd`, object path: `/io/github/tt_riingd`, interface: `io.github.tt_riingd1`):
 
-  * `GetActiveCurve(y controller, y channel) → s` — get the active fan curve name
-  * `Stop()` — gracefully shut down the daemon
-  * `SwitchActiveCurve(y controller, y channel, s curve_name)` — switch active curve
-  * `UpdateCurveData(y controller, y channel, s curve_name, s curve_json)` — update curve parameters
-* **Properties & Signals**:
-
-  * `Version (s)` — returns daemon version
-  * `Stopped()` — signal emitted on shutdown
-* **CLI utility** `riingctl` (Bash script) for simplified D-Bus calls
-* **User-scope systemd** integration (`tt-riingd.service`)
-* Zero runtime dependencies beyond essential crates: `tokio`, `hidapi`, `zbus`
-
-> [!TIP]
-> Follow logs via `journalctl --user -u tt-riingd.service -f`.
+  * Methods: `GetActiveCurve(y controller, y channel) → s`, `SwitchActiveCurve(y, y, s)`, `UpdateCurveData(y, y, s, s)`, `Stop()`
+  * Properties: `Version (s)`
+  * Signal: `Stopped()`
+* **YAML configuration** (v0.4+): define polling interval, default speeds, curves, LED modes and sensor backends in `config/config.yml`.
+* **CLI utility** `riingctl` (Bash script) for quick D-Bus calls.
+* **Udev rule** for non-root HID access (`99-tt-riingd.rules`).
+* **User & Systemd integration**: ship service units for user and system scopes.
+* **Zero runtime deps** beyond core crates: `tokio`, `hidapi`, `zbus`, `serde_yaml`, `clap`.
+* **GitHub Actions CI**: formatting, linting, tests on PR & push.
 
 ## Installation
 
 ```bash
-git clone https://github.com/yourusername/tt-riingd.git
-cd tt-riingd
+git clone https://github.com/At1ass/tt_riingd.git
+cd tt_riingd
 cargo build --release
 sudo install -Dm755 target/release/tt-riingd /usr/local/bin/tt-riingd
 ```
 
-> [!WARNING]
-> Ensure you run commands in the same user session where the service will operate.
+## Udev Rule
 
-## Configuration
+Place `99-tt-riingd.rules` in `/etc/udev/rules.d/`:
 
-> [!NOTE]
-> Configuration files are not yet supported. Defaults are hardcoded until v0.4.
+```ini
+# Thermaltake Riing controllers: PID 0x232B–0x232E
+SUBSYSTEM=="hidraw", SUBSYSTEMS=="usb", ATTRS{idVendor}=="264a", ATTRS{idProduct}=="232?", TAG+="uaccess", TAG+="Thermaltake_Riing"
+```
 
-By default, `tt-riingd` looks for `config/config.yml`. To override:
+```bash
+sudo cp 99-tt-riingd.rules /etc/udev/rules.d/
+sudo udevadm control --reload\sudo udevadm trigger
+```
+
+## Configuration (v0.4+)
+
+Defaults work with minimal setup. To customize, create `config/config.yml`:
+
+```yaml
+tick_seconds: 2      # sensor polling interval (sec)
+init_speed: 50       # default fan speed (%)
+
+controllers:
+  - id: 1
+    curves:
+      - name: Default
+        temps: [30.0, 70.0, 90.0]
+        speeds: [20, 50, 100]
+
+sensors:
+  - type: lm_sensors
+```
+
+Override location:
 
 ```bash
 export TT_RIINGD_CONFIG=/etc/tt-riingd/config.yml
 ```
 
-Example (future support):
+## Running
 
-```yaml
-system:
-  tick_seconds: 2      # sensor polling interval (seconds)
-  init_speed: 50       # initial fan speed (%)
-curves:
-  ...                   # defined in v0.4
-sensors:
-  ...                   # defined in v0.4
-```
-
-## Running the Daemon
-
-### systemd unit
-
-Create `/etc/systemd/system/tt-riingd.service`:
+### Systemd (user)
 
 ```ini
+# ~/.config/systemd/user/tt-riingd.service
+[Unit]
+Description=tt-riingd — Riing fan controller
+after=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/tt-riingd --config $XDG_CONFIG_HOME/tt-riingd/config.yml
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now tt-riingd
+journalctl --user -u tt-riingd -f
+```
+
+### System scope
+
+```ini
+# /etc/systemd/system/tt-riingd.service
 [Unit]
 Description=tt-riingd — Riing fan controller
 after=network.target
@@ -90,69 +127,48 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now tt-riingd
 ```
 
-### Manual launch
-
-```bash
-tt-riingd --config /path/to/config.yml
-```
-
-## D-Bus Interface
-
-**Bus name:** `io.github.tt_riingd`
-**Object path:** `/io/github/tt_riingd`
-**Interface:** `io.github.tt_riingd1`
+## D-Bus Introspection
 
 ```bash
 busctl --user introspect io.github.tt_riingd /io/github/tt_riingd
 ```
 
-```text
-NAME                   TYPE      SIGNATURE   RESULT/VALUE   FLAGS
-.GetActiveCurve        method    yy          s               -
-.Stop                  method    -           -               -
-.SwitchActiveCurve     method    yys         -               -
-.UpdateCurveData       method    yyss        -               -
-.Version               property  s           "1.0"          emits-change
-.Stopped               signal    -           -               -
-```
-
 ## CLI: `riingctl`
 
-A Bash script to simplify D-Bus calls. Place it in your `PATH` and make it executable:
+Make executable and in your PATH:
 
 ```bash
-chmod +x ~/bin/riingctl
+chmod +x riingctl && mv riingctl ~/bin/
 ```
+
+Usage:
 
 ```bash
 riingctl <command> [args]
 ```
 
-**Commands:**
+Common commands:
 
-* `introspect` — show D-Bus introspection
-* `version` — get `Version` property
-* `get-active-curve <controller> <channel>` — call `GetActiveCurve(y y)` → s
-* `stop` — call `Stop()`
-* `switch-active-curve <controller> <channel> <curve_name>` — call `SwitchActiveCurve(y y s)`
-* `update-curve-data <controller> <channel> <curve_name> <curve_json>` — call `UpdateCurveData(y y s s)`
-
-**Example:**
-
-```bash
-riingctl get-active-curve 1 1
-riingctl switch-active-curve 1 1 StepCurve
-riingctl update-curve-data 1 1 StepCurve '{"t":"StepCurve","c":{"temps":[0.0,100.0],"speeds":[20,100]}}'
-```
+* `version`
+* `get-active-curve <controller> <channel>`
+* `switch-active-curve <controller> <channel> <curve_name>`
+* `update-curve-data <controller> <channel> <curve_name> <curve_json>`
+* `stop`
 
 ## Development
 
-* Format: `cargo fmt`
-* Lint: `cargo clippy`
+* Format: `cargo fmt --all`
+* Lint: `cargo clippy --all-targets -- -D warnings`
+* Test: `cargo test --all`
 
-> [!ATTENTION]
-> Unit tests for stable modules (e.g., HID packet serialization, curve parsing) are recommended as the project matures.
+## Roadmap & Contributions
+
+See `ROADMAP.md` for planned features (GUI, plugin API, packaging). Contributions welcome! Please open issues and PRs.
+
+## License
+
+Licensed under the MIT License. See [LICENSE](LICENSE) for details.
 
 ---
 
-*This project is under active development. Contributions welcome!*
+© 2025 At1ass and contributors
