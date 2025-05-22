@@ -8,43 +8,29 @@ use hidapi::{HidApi, HidDevice};
 use log::info;
 use tokio::sync::{Mutex, MutexGuard};
 
+use super::controller::{Controller, Fan};
+
 pub const VID: u16 = 0x264A; // Thermaltake
 pub const DEFAULT_PERCENT: u8 = 50;
-pub const INIT_PACKET: [u8; 3] = [0x00, 0xFE, 0x33];
-pub const READ_TIMEOUT: i32 = 250;
 
 #[derive(Debug)]
-struct Fan {
-    current_speed: u8,
-    current_rpm: u32,
-    active_curve: String,
-    curve: HashMap<String, FanCurve>,
-}
-
-#[derive(Debug)]
-struct Controller {
-    name: String,
-    dev: HidDevice,
-    fans: Vec<Fan>,
-}
-
-#[derive(Debug)]
-pub struct TTRiingQuad(Arc<Mutex<Controller>>);
+pub struct TTRiingQuad(Arc<Mutex<Controller<HidDevice>>>);
 
 #[async_trait]
 impl FanController for TTRiingQuad {
     async fn send_init(&self) -> Result<()> {
-        info!("Initializing TTRiingQuad controller");
-        self.read()
-            .await
-            .dev
-            .write(&INIT_PACKET)
-            .map(|_| ())
-            .map_err(|e| anyhow!("{e}"))
+        #[cfg(debug_assertions)]
+        {
+            info!("Initializing TTRiingQuad controller");
+        }
+        self.read().await.init()
     }
 
     async fn update_speeds(&self, temp: f32) -> Result<()> {
-        info!("Updating speeds for TTRiingQuad controller");
+        #[cfg(debug_assertions)]
+        {
+            info!("Updating speeds for TTRiingQuad controller");
+        }
         for idx in 0..5 {
             self.process_fan(idx, temp).await?;
         }
@@ -55,11 +41,18 @@ impl FanController for TTRiingQuad {
         self.process_fan((channel - 1) as usize, temp).await
     }
 
+    async fn update_channel_color(&self, channel: u8, red: u8, green: u8, blue: u8) -> Result<()> {
+        self.process_fan_color((channel - 1) as usize, green, red, blue)
+            .await
+    }
     async fn switch_curve(&self, channel: u8, curve: &str) -> Result<()> {
-        info!(
-            "Switching curve for TTRiingQuad controller on channel {}",
-            channel
-        );
+        #[cfg(debug_assertions)]
+        {
+            info!(
+                "Switching curve for TTRiingQuad controller on channel {}",
+                channel
+            );
+        }
         self.read()
             .await
             .fans
@@ -69,10 +62,13 @@ impl FanController for TTRiingQuad {
     }
 
     async fn get_active_curve(&self, channel: u8) -> Result<String> {
-        info!(
-            "Getting active curve for TTRiingQuad controller on channel {}",
-            channel
-        );
+        #[cfg(debug_assertions)]
+        {
+            info!(
+                "Getting active curve for TTRiingQuad controller on channel {}",
+                channel
+            );
+        }
         self.read()
             .await
             .fans
@@ -81,16 +77,23 @@ impl FanController for TTRiingQuad {
             .ok_or(anyhow!("Fans not found"))?
     }
 
+    async fn firmware_version(&self) -> Result<(u8, u8, u8)> {
+        self.read().await.get_firmware_version()
+    }
+
     async fn update_curve_data(
         &self,
         channel: u8,
         curve: &str,
         curve_data: &FanCurve,
     ) -> Result<()> {
-        info!(
-            "Updating curve data for TTRiingQuad controller on channel {}",
-            channel
-        );
+        #[cfg(debug_assertions)]
+        {
+            info!(
+                "Updating curve data for TTRiingQuad controller on channel {}",
+                channel
+            );
+        }
         self.read()
             .await
             .fans
@@ -110,7 +113,7 @@ impl TTRiingQuad {
             .filter_map(|(idx, d)| {
                 api.open(d.vendor_id(), d.product_id()).ok().map(|device| {
                     Box::new(TTRiingQuad(Arc::new(Mutex::new(Controller {
-                        name: format!("TTRiingQuad{}", idx + 1),
+                        name: format!("TTRiingQuad: {}", idx + 1),
                         dev: device,
                         fans: (0..5)
                             .map(|_| Fan {
@@ -126,9 +129,11 @@ impl TTRiingQuad {
             .collect())
     }
 
+    #[allow(irrefutable_let_patterns)]
     pub fn find_controllers(
         api: &HidApi,
         ctrl_cfg: &[ControllerCfg],
+        curve_map: &HashMap<String, FanCurve>,
     ) -> Result<Vec<Box<dyn FanController>>> {
         Ok(ctrl_cfg
             .iter()
@@ -146,7 +151,11 @@ impl TTRiingQuad {
                                 curve: fan
                                     .curve
                                     .iter()
-                                    .map(|c| ((c.0.clone()), FanCurve::from(c.1.clone())))
+                                    .filter_map(|curve_str| {
+                                        curve_map
+                                            .get(curve_str)
+                                            .map(|curve| (curve_str.clone(), curve.clone()))
+                                    })
                                     .collect(),
                             })
                             .collect(),
@@ -163,105 +172,66 @@ impl TTRiingQuad {
             let guard = self.0.lock().await;
             guard.fans[idx].compute_speed(temp)?
         };
+        #[cfg(debug_assertions)]
+        {
+            info!("Computed speed for fan {}: {}", idx + 1, speed);
+        }
         let ctrl = self.0.clone();
-        let (ret_speed, rpm) = tokio::task::spawn_blocking(move || {
+        let (speed, rpm) = tokio::task::spawn_blocking(move || {
             let guard = ctrl.blocking_lock();
-            info!(
-                "Processing fan {} on controller {}: {}°C",
-                idx + 1,
-                guard.name,
-                temp
-            );
+            #[cfg(debug_assertions)]
+            {
+                info!(
+                    "Processing fan {} on controller {}: {}°C",
+                    idx + 1,
+                    guard.name,
+                    temp
+                );
+            }
             Self::proccess_fan_inner(guard, idx, speed)
         })
-        .await?;
-        self.0.lock().await.fans[idx].update_stats(ret_speed, rpm);
+        .await??;
+
+        self.0.lock().await.fans[idx].update_stats(speed, rpm);
         Ok(())
     }
 
-    async fn read(&self) -> MutexGuard<'_, Controller> {
+    async fn process_fan_color(&self, idx: usize, green: u8, red: u8, blue: u8) -> Result<()> {
+        let ctrl = self.0.clone();
+        tokio::task::spawn_blocking(move || {
+            let guard = ctrl.blocking_lock();
+            #[cfg(debug_assertions)]
+            {
+                info!("Setting color fan {} on controller {}", idx + 1, guard.name,);
+            }
+            Self::proccess_fan_inner_color(guard, idx, green, red, blue)
+        })
+        .await?
+    }
+    async fn read(&self) -> MutexGuard<'_, Controller<HidDevice>> {
         self.0.lock().await
     }
 
     #[inline(never)]
-    fn proccess_fan_inner(guard: MutexGuard<'_, Controller>, idx: usize, speed: u8) -> (u8, u32) {
-        let _ = guard.dev.write(&build_package((idx + 1) as u8, speed));
-
-        let mut buf = [0u8; 193];
-        let _ = guard.dev.read_timeout(&mut buf, READ_TIMEOUT);
-
-        let s = buf[0x04];
-        let rpm = ((buf[0x05] as u32) << 8) | buf[0x06] as u32;
-
-        (s, rpm)
-    }
-}
-
-impl Fan {
-    fn compute_speed(&self, temp: f32) -> Result<u8> {
-        match self
-            .curve
-            .get(&self.active_curve)
-            .ok_or(anyhow!("Curve not found"))?
-        {
-            FanCurve::Constant(speed) => Ok(*speed),
-            FanCurve::StepCurve { temps, speeds } => temps
-                .windows(2)
-                .zip(speeds.windows(2))
-                .find_map(|(t, w)| {
-                    let (t0, t1) = (t[0], t[1]);
-                    let (s0, s1) = (w[0], w[1]);
-                    if (t0..=t1).contains(&temp) {
-                        let ratio = (temp - t0) / (t1 - t0);
-                        let speed = s0 as f32 * (1.0 - ratio) + s1 as f32 * ratio;
-                        Some(speed.round().clamp(0.0, 100.0) as u8)
-                    } else {
-                        None
-                    }
-                })
-                .ok_or(anyhow!("Temperature not found in curve")),
-            FanCurve::BezierCurve { points: _ } => {
-                // Implement Bezier curve interpolation
-                Err(anyhow!("Bezier curve interpolation not implemented"))
-            }
-        }
+    fn proccess_fan_inner(
+        guard: MutexGuard<'_, Controller<HidDevice>>,
+        idx: usize,
+        speed: u8,
+    ) -> Result<(u8, u16)> {
+        guard.set_speed((idx + 1) as u8, speed)?;
+        guard.get_data((idx + 1) as u8)
     }
 
-    fn update_stats(&mut self, speed: u8, rpm: u32) {
-        self.current_rpm = rpm;
-        self.current_speed = speed;
+    #[inline(never)]
+    fn proccess_fan_inner_color(
+        guard: MutexGuard<'_, Controller<HidDevice>>,
+        idx: usize,
+        green: u8,
+        red: u8,
+        blue: u8,
+    ) -> Result<()> {
+        guard.set_rgb((idx + 1) as u8, 0x24, vec![(green, red, blue); 52])
     }
-
-    fn update_curve(&mut self, curve: &str) -> Result<()> {
-        self.curve
-            .get(curve)
-            .map(|_| {
-                self.active_curve = curve.to_string();
-                Ok(())
-            })
-            .ok_or(anyhow!("Curve {curve} not found"))?
-    }
-
-    fn update_curve_data(&mut self, curve: &str, curve_data: &FanCurve) -> Result<()> {
-        self.curve
-            .get_mut(curve)
-            .filter(|c| c == &curve_data)
-            .map(|c| {
-                info!("Disc c: {c:?}");
-                info!("Disc curve_data: {c:?}");
-
-                *c = curve_data.clone();
-            })
-            .ok_or(anyhow!("Curve not found"))
-    }
-
-    fn get_active_curve(&self) -> Result<String> {
-        Ok(self.active_curve.clone())
-    }
-}
-
-pub fn build_package(channel: u8, value: u8) -> [u8; 6] {
-    [0x00, 0x32, 0x51, channel, 0x01, value]
 }
 
 fn build_default_curves() -> HashMap<String, FanCurve> {

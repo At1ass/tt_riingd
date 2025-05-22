@@ -1,4 +1,4 @@
-use std::{slice::Iter as SliceIter, sync::Arc};
+use std::{collections::HashMap, slice::Iter as SliceIter, sync::Arc};
 
 use anyhow::{Ok, Result, anyhow};
 use futures::stream::{Iter as FutureIter, StreamExt, iter};
@@ -24,10 +24,16 @@ impl Controllers {
     pub fn init_from_cfg(cfg: &Config) -> Result<Self> {
         let api = HidApi::new()?;
         let mut controllers = Vec::<Box<dyn FanController>>::new();
+        let curve_map: HashMap<String, FanCurve> = cfg
+            .curves
+            .iter()
+            .map(|c| (c.get_id(), FanCurve::from(c)))
+            .collect();
 
         controllers.extend(drivers::tt_riing_quad::TTRiingQuad::find_controllers(
             &api,
-            &cfg.controllers
+            &cfg.controllers,
+            &curve_map,
         )?);
 
         Ok(Self(Arc::new(controllers)))
@@ -55,6 +61,19 @@ impl Controllers {
             .await
     }
 
+    pub async fn update_channel_color(
+        &self,
+        controller: u8,
+        channel: u8,
+        red: u8,
+        green: u8,
+        blue: u8,
+    ) -> Result<()> {
+        self.get_device(controller)?
+            .update_channel_color(channel, red, green, blue)
+            .await
+    }
+
     pub async fn switch_curve(&self, controller: u8, channel: u8, curve: &str) -> Result<()> {
         self.get_device(controller)?
             .switch_curve(channel, curve)
@@ -63,6 +82,10 @@ impl Controllers {
 
     pub async fn get_active_curve(&self, controller: u8, channel: u8) -> Result<String> {
         self.get_device(controller)?.get_active_curve(channel).await
+    }
+
+    pub async fn get_firmware_version(&self, controller: u8) -> Result<(u8, u8, u8)> {
+        self.get_device(controller)?.firmware_version().await
     }
 
     pub async fn update_curve_data(

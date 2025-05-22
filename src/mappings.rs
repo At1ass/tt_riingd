@@ -1,6 +1,6 @@
 use dashmap::{DashMap, DashSet};
 
-use crate::config::MappingCfg;
+use crate::config::{ColorMappingCfg, MappingCfg};
 
 pub type SensorKey = String;
 
@@ -16,24 +16,53 @@ pub struct Mapping {
     sensor2fans: DashMap<SensorKey, DashSet<FanRef>>,
 }
 
+#[derive(Default, Debug)]
+pub struct ColorMapping {
+    color2fans: DashMap<String, DashSet<FanRef>>,
+}
+
+impl ColorMapping {
+    pub fn build_color_mapping(color_cfg: &[ColorMappingCfg]) -> Self {
+        color_cfg
+            .iter()
+            .flat_map(|c| {
+                let ckey = c.color.clone();
+                c.targets.iter().map(move |t| (ckey.clone(), t))
+            })
+            .fold(Self::default(), |acc, (sensor, target)| {
+                let fan = FanRef {
+                    controller_id: target.controller as usize,
+                    channel: target.fan_idx as usize,
+                };
+
+                acc.color2fans.entry(sensor).or_default().insert(fan);
+                acc
+            })
+    }
+
+    pub fn iter(&self) -> dashmap::iter::Iter<String, DashSet<FanRef>> {
+        self.color2fans.iter()
+    }
+}
+
 impl Mapping {
     pub fn load_mappings(mapping_cfg: &[MappingCfg]) -> Self {
-        mapping_cfg.iter()
+        mapping_cfg
+            .iter()
             .flat_map(|m| {
                 let skey = m.sensor.clone();
                 m.targets.iter().map(move |t| (skey.clone(), t))
             })
-        .fold(Self::default(), |acc, (sensor, target)| {
-            let fan = FanRef {
-                controller_id: target.controller as usize,
-                channel: target.fan_idx as usize,
-            };
+            .fold(Self::default(), |acc, (sensor, target)| {
+                let fan = FanRef {
+                    controller_id: target.controller as usize,
+                    channel: target.fan_idx as usize,
+                };
 
-            acc.fans2sensor.insert(fan, sensor.clone());
-            acc.sensor2fans.entry(sensor).or_default()
-            .insert(fan);
-            acc
-        })
+                acc.fans2sensor.insert(fan, sensor.clone());
+                acc.sensor2fans.entry(sensor).or_default().insert(fan);
+                acc
+            })
     }
 
     pub fn attach(&self, fan: FanRef, sensor: SensorKey) {
