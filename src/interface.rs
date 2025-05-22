@@ -59,6 +59,13 @@ impl DBusInterface {
             .map_err(|e| zbus::fdo::Error::Failed(format!("Curve not found: {e}")))
     }
 
+    async fn get_firmware_version(&self, controller: u8) -> zbus::fdo::Result<String> {
+        self.controllers
+            .get_firmware_version(controller)
+            .await
+            .map_err(|e| zbus::fdo::Error::Failed(format!("Curve not found: {e}")))
+            .map(|(mj, mi, pa)| format!("{mj}.{mi}.{pa}"))
+    }
     async fn update_curve_data(
         &self,
         controller: u8,

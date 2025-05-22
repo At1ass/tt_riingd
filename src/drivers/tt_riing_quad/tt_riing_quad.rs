@@ -1,4 +1,4 @@
-use crate::fan_curve::{FanCurve, Point};
+use crate::fan_curve::FanCurve;
 use crate::{config::ControllerCfg, fan_controller::FanController};
 use std::{collections::HashMap, sync::Arc};
 
@@ -8,31 +8,13 @@ use hidapi::{HidApi, HidDevice};
 use log::info;
 use tokio::sync::{Mutex, MutexGuard};
 
+use super::controller::{Controller, Fan};
+
 pub const VID: u16 = 0x264A; // Thermaltake
 pub const DEFAULT_PERCENT: u8 = 50;
-pub const INIT_PACKET: [u8; 3] = [0x00, 0xFE, 0x33];
-pub const READ_TIMEOUT: i32 = 250;
-const MAX_ITERATIONS: usize = 100;
-const EPSILON: f32 = 1e-6;
 
 #[derive(Debug)]
-struct Fan {
-    current_speed: u8,
-    current_rpm: u32,
-    active_curve: String,
-    curve: HashMap<String, FanCurve>,
-}
-
-#[derive(Debug)]
-#[allow(dead_code)]
-struct Controller {
-    name: String,
-    dev: HidDevice,
-    fans: Vec<Fan>,
-}
-
-#[derive(Debug)]
-pub struct TTRiingQuad(Arc<Mutex<Controller>>);
+pub struct TTRiingQuad(Arc<Mutex<Controller<HidDevice>>>);
 
 #[async_trait]
 impl FanController for TTRiingQuad {
@@ -41,12 +23,7 @@ impl FanController for TTRiingQuad {
         {
             info!("Initializing TTRiingQuad controller");
         }
-        self.read()
-            .await
-            .dev
-            .write(&INIT_PACKET)
-            .map(|_| ())
-            .map_err(|e| anyhow!("{e}"))
+        self.read().await.init()
     }
 
     async fn update_speeds(&self, temp: f32) -> Result<()> {
@@ -99,6 +76,11 @@ impl FanController for TTRiingQuad {
             .map(|fan| fan.get_active_curve())
             .ok_or(anyhow!("Fans not found"))?
     }
+
+    async fn firmware_version(&self) -> Result<(u8, u8, u8)> {
+        self.read().await.get_firmware_version()
+    }
+
 
     async fn update_curve_data(
         &self,
@@ -173,7 +155,6 @@ impl TTRiingQuad {
                                     .filter_map(|curve_str| {
                                         curve_map
                                             .get(curve_str)
-                                            .inspect(|_| info!("Matched: {curve_str}"))
                                             .map(|curve| (curve_str.clone(), curve.clone()))
                                     })
                                     .collect(),
@@ -197,7 +178,7 @@ impl TTRiingQuad {
             info!("Computed speed for fan {}: {}", idx + 1, speed);
         }
         let ctrl = self.0.clone();
-        let (ret_speed, rpm) = tokio::task::spawn_blocking(move || {
+        let (speed, rpm) = tokio::task::spawn_blocking(move || {
             let guard = ctrl.blocking_lock();
             #[cfg(debug_assertions)]
             {
@@ -210,8 +191,9 @@ impl TTRiingQuad {
             }
             Self::proccess_fan_inner(guard, idx, speed)
         })
-        .await?;
-        self.0.lock().await.fans[idx].update_stats(ret_speed, rpm);
+        .await??;
+
+        self.0.lock().await.fans[idx].update_stats(speed, rpm);
         Ok(())
     }
 
@@ -227,129 +209,30 @@ impl TTRiingQuad {
         })
         .await?
     }
-    async fn read(&self) -> MutexGuard<'_, Controller> {
+    async fn read(&self) -> MutexGuard<'_, Controller<HidDevice>> {
         self.0.lock().await
     }
 
     #[inline(never)]
-    fn proccess_fan_inner(guard: MutexGuard<'_, Controller>, idx: usize, speed: u8) -> (u8, u32) {
-        let _ = guard.dev.write(&build_package((idx + 1) as u8, speed));
-
-        let mut buf = [0u8; 193];
-        let _ = guard.dev.read_timeout(&mut buf, READ_TIMEOUT);
-
-        let s = buf[0x04];
-        let rpm = ((buf[0x05] as u32) << 8) | buf[0x06] as u32;
-
-        (s, rpm)
+    fn proccess_fan_inner(
+        guard: MutexGuard<'_, Controller<HidDevice>>,
+        idx: usize,
+        speed: u8,
+    ) -> Result<(u8, u16)> {
+        guard.set_speed((idx + 1) as u8, speed)?;
+        guard.get_data((idx + 1) as u8)
     }
 
     #[inline(never)]
     fn proccess_fan_inner_color(
-        guard: MutexGuard<'_, Controller>,
+        guard: MutexGuard<'_, Controller<HidDevice>>,
         idx: usize,
         green: u8,
         red: u8,
         blue: u8,
     ) -> Result<()> {
-        let _ = guard
-            .dev
-            .write(&build_color_package((idx + 1) as u8, green, red, blue));
-
-        let mut buf = [0u8; 193];
-        let _ = guard.dev.read_timeout(&mut buf, READ_TIMEOUT);
-
-        Ok(())
+        guard.set_rgb((idx + 1) as u8, 0x24, vec!((green, red, blue); 52))
     }
-}
-
-impl Fan {
-    fn compute_speed(&self, temp: f32) -> Result<u8> {
-        match self
-            .curve
-            .get(&self.active_curve)
-            .ok_or(anyhow!("Curve not found"))?
-        {
-            FanCurve::Constant(speed) => Ok(*speed),
-            FanCurve::StepCurve { temps, speeds } => temps
-                .windows(2)
-                .zip(speeds.windows(2))
-                .find_map(|(t, w)| {
-                    let (t0, t1) = (t[0], t[1]);
-                    let (s0, s1) = (w[0], w[1]);
-                    if (t0..=t1).contains(&temp) {
-                        let ratio = (temp - t0) / (t1 - t0);
-                        let speed = s0 as f32 * (1.0 - ratio) + s1 as f32 * ratio;
-                        Some(speed.round().clamp(0.0, 100.0) as u8)
-                    } else {
-                        None
-                    }
-                })
-                .ok_or(anyhow!("Temperature not found in curve")),
-            FanCurve::BezierCurve { points } => {
-                if points.len() != 4 {
-                    Err(anyhow!("Bezier curve must have 4 points"))
-                } else {
-                    Ok(get_speed_for_temp(&points[0..4], temp) as u8)
-                }
-            }
-        }
-    }
-
-    fn update_stats(&mut self, speed: u8, rpm: u32) {
-        self.current_rpm = rpm;
-        self.current_speed = speed;
-    }
-
-    fn update_curve(&mut self, curve: &str) -> Result<()> {
-        self.curve
-            .get(curve)
-            .map(|_| {
-                self.active_curve = curve.to_string();
-                Ok(())
-            })
-            .ok_or(anyhow!("Curve {curve} not found"))?
-    }
-
-    fn update_curve_data(&mut self, curve: &str, curve_data: &FanCurve) -> Result<()> {
-        self.curve
-            .get_mut(curve)
-            .filter(|c| c == &curve_data)
-            .map(|c| {
-                #[cfg(debug_assertions)]
-                {
-                    info!("Disc c: {c:?}");
-                    info!("Disc curve_data: {c:?}");
-                }
-
-                *c = curve_data.clone();
-            })
-            .ok_or(anyhow!("Curve not found"))
-    }
-
-    fn get_active_curve(&self) -> Result<String> {
-        Ok(self.active_curve.clone())
-    }
-}
-
-pub fn build_package(channel: u8, value: u8) -> [u8; 6] {
-    [0x00, 0x32, 0x51, channel, 0x01, value]
-}
-
-pub fn build_color_package(channel: u8, green: u8, red: u8, blue: u8) -> [u8; 193] {
-    let mut package = [0u8; 193];
-
-    package[0x00..=0x04].copy_from_slice(&[0x00, 0x32, 0x52, channel, 0x24]);
-    for i in (0..52).step_by(3) {
-        package[(0x05 + i)..(0x05 + i + 3)].copy_from_slice(&[green, red, blue]);
-    }
-
-    #[cfg(debug_assertions)]
-    {
-        info!("Built color package: {:?}", package);
-    }
-
-    package
 }
 
 fn build_default_curves() -> HashMap<String, FanCurve> {
@@ -375,43 +258,4 @@ fn build_default_curves() -> HashMap<String, FanCurve> {
             },
         ),
     ])
-}
-
-fn compute_bezier_at_t(pts: &[Point], t: f32) -> Point {
-    let u = 1.0 - t;
-    let tt = t * t;
-    let uu = u * u;
-    let uuu = uu * u;
-    let ttt = tt * t;
-
-    let x = uuu * pts[0].x + 3.0 * uu * t * pts[1].x + 3.0 * u * tt * pts[2].x + ttt * pts[3].x;
-
-    let y = uuu * pts[0].y + 3.0 * uu * t * pts[1].y + 3.0 * u * tt * pts[2].y + ttt * pts[3].y;
-
-    (x, y).into()
-}
-
-/// Ищет `y` по заданной `temp` (т.е. по `x`) на кривой Безье
-pub fn get_speed_for_temp(pts: &[Point], temp: f32) -> f32 {
-    let mut t_low = 0.0_f32;
-    let mut t_high = 1.0_f32;
-    let mut t_mid = 0.0_f32;
-
-    for _ in 0..MAX_ITERATIONS {
-        t_mid = (t_low + t_high) * 0.5;
-        let p = compute_bezier_at_t(pts, t_mid);
-
-        if (p.x - temp).abs() < EPSILON {
-            return p.y;
-        }
-        if p.x < temp {
-            t_low = t_mid;
-        } else {
-            t_high = t_mid;
-        }
-    }
-
-    // по окончании итераций возвращаем последнее y
-    let p = compute_bezier_at_t(pts, t_mid);
-    p.y
 }

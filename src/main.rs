@@ -189,8 +189,7 @@ fn spawn_color_task(
                     .collect();
                 for (cfg, fans) in map {
                     for fan in fans {
-                        let value = controllers.clone();
-                        let _ = value
+                        let ret = controllers
                             .update_channel_color(
                                 fan.controller_id as u8,
                                 fan.channel as u8,
@@ -199,6 +198,9 @@ fn spawn_color_task(
                                 cfg.rgb[2],
                             )
                             .await;
+                        if let Err(e) = ret {
+                            error!("update_channel_color error: {e}");
+                        }
                     }
                 }
             }

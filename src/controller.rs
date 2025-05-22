@@ -84,6 +84,10 @@ impl Controllers {
         self.get_device(controller)?.get_active_curve(channel).await
     }
 
+    pub async fn get_firmware_version(&self, controller: u8) -> Result<(u8, u8, u8)> {
+        self.get_device(controller)?.firmware_version().await
+    }
+
     pub async fn update_curve_data(
         &self,
         controller: u8,
