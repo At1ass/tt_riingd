@@ -65,6 +65,7 @@ impl Mapping {
             })
     }
 
+    #[allow(dead_code)]
     pub fn attach(&self, fan: FanRef, sensor: SensorKey) {
         if let Some(old) = self.fans2sensor.insert(fan, sensor.clone()) {
             if let Some(set) = self.sensor2fans.get(&old) {
@@ -74,6 +75,7 @@ impl Mapping {
         self.sensor2fans.entry(sensor).or_default().insert(fan);
     }
 
+    #[allow(dead_code)]
     pub fn detach(&self, fan: FanRef) {
         if let Some((_, key)) = self.fans2sensor.remove(&fan) {
             if let Some(set) = self.sensor2fans.get(&key) {
