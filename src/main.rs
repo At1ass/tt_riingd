@@ -30,7 +30,7 @@ fn init_log() -> Result<()> {
     syslog::unix(Formatter3164 {
         facility: Facility::LOG_USER,
         hostname: None,
-        process: "tt_riing_rs".into(),
+        process: "tt_riingd".into(),
         pid: 0,
     })
     .map_err(|e| anyhow!("{e}"))
@@ -41,17 +41,19 @@ fn init_log() -> Result<()> {
     })
 }
 
-fn into_daemon() -> Result<()> {
-    File::create("/var/tmp/tt_riingd.log")
+fn into_daemon(daemonize: bool) -> Result<()> {
+    daemonize.then(|| File::create("/var/tmp/tt_riingd.log")
         .and_then(|out| Ok((out.try_clone()?, out)))
         .map_err(|e| anyhow!("{e}"))
         .and_then(|(stderr, stdout)| {
             Daemonize::new()
+                .pid_file("/tmp/tt_riingd.pid")
                 .stdout(stdout)
                 .stderr(stderr)
                 .start()
                 .map_err(|e| anyhow!("{e}"))
-        })
+        }))
+    .map_or(Ok(()), |res| res)
 }
 
 #[tokio::main]
@@ -118,7 +120,7 @@ async fn tokio_main(config_path: Option<PathBuf>) -> Result<()> {
 fn main() -> Result<()> {
     let cli = cli::Cli::parse();
 
-    into_daemon()
+    into_daemon(cli.daemonize)
         .and_then(|_| init_log())
         .and_then(|_| tokio_main(cli.config))
 }
