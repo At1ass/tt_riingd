@@ -10,6 +10,6 @@ pub struct Cli {
     pub config: Option<PathBuf>,
 
     /// Run in foreground mode with daemonizing
-    #[arg(short = 'd', long = "daemonize", default_value = "false" )]
+    #[arg(short = 'd', long = "daemonize", default_value = "false")]
     pub daemonize: bool,
 }

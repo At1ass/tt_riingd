@@ -1,5 +1,5 @@
 version: 1
-tick_seconds: 2
+tick_seconds: 1
 enable_broadcast: false
 broadcast_interval: 1
 
@@ -144,7 +144,7 @@ mappings:
 #  color <-> fan mapping
 ################################################################################
 color_mappings:
-  - color: "blue"
+  - color: "yellow"
     targets:
       - { controller: 1, fan_idx: 1 }
       - { controller: 1, fan_idx: 2 }

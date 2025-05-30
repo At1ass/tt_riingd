@@ -10,23 +10,52 @@ use super::{
     protocol::{Command, Response},
 };
 
+/// HID communication timeout in milliseconds.
 pub const READ_TIMEOUT: i32 = 250;
+
+/// Maximum iterations for Bezier curve computation.
 const MAX_ITERATIONS: usize = 100;
+
+/// Precision epsilon for Bezier curve calculations.
 const EPSILON: f32 = 1e-6;
 
+/// Individual fan state and configuration.
+///
+/// Represents a single fan connected to a controller, including its current
+/// status, active curve configuration, and available speed curves.
 #[derive(Debug)]
 pub struct Fan {
+    /// Current fan speed percentage (0-100).
     pub current_speed: u8,
+
+    /// Current fan RPM reading.
     pub current_rpm: u16,
+
+    /// Name of the currently active speed curve.
     pub active_curve: String,
+
+    /// Map of available speed curves by name.
     pub curve: HashMap<String, FanCurve>,
 }
 
+/// Hardware controller for managing multiple fans.
+///
+/// Provides low-level communication with fan controller hardware through
+/// the DeviceIO abstraction. Handles protocol communication and fan management.
+///
+/// # Type Parameters
+///
+/// * `Io` - Device I/O implementation (typically HidDevice)
 #[derive(Debug)]
 #[allow(dead_code)]
 pub struct Controller<Io: DeviceIO> {
+    /// Human-readable controller name for identification.
     pub name: String,
+
+    /// Device I/O interface for hardware communication.
     pub dev: Io,
+
+    /// Vector of fans managed by this controller.
     pub fans: Vec<Fan>,
 }
 
@@ -41,6 +70,14 @@ impl<Io: DeviceIO> Controller<Io> {
         Response::parse(cmd, &buf)
     }
 
+    /// Initializes the controller hardware.
+    ///
+    /// Sends initialization command to prepare the controller for operation.
+    /// Must be called before other controller operations.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the controller fails to initialize or communication fails.
     pub fn init(&self) -> Result<()> {
         match self.request(Command::Init)? {
             Response::Status(0xFC) => Ok(()),
@@ -48,6 +85,15 @@ impl<Io: DeviceIO> Controller<Io> {
         }
     }
 
+    /// Retrieves the controller firmware version.
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing (major, minor, patch) version numbers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if communication fails or response is invalid.
     pub fn get_firmware_version(&self) -> Result<(u8, u8, u8)> {
         match self.request(Command::GetFirmwareVersion)? {
             Response::FirmwareVersion {
@@ -59,6 +105,16 @@ impl<Io: DeviceIO> Controller<Io> {
         }
     }
 
+    /// Sets the speed for a specific fan port.
+    ///
+    /// # Arguments
+    ///
+    /// * `port` - Fan port number (1-based)
+    /// * `speed` - Speed percentage (0-100)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if communication fails or the port is invalid.
     pub fn set_speed(&self, port: u8, speed: u8) -> Result<()> {
         match self.request(Command::SetSpeed { port, speed })? {
             Response::Status(0xFC) => Ok(()),
@@ -66,6 +122,19 @@ impl<Io: DeviceIO> Controller<Io> {
         }
     }
 
+    /// Reads current speed and RPM data from a fan port.
+    ///
+    /// # Arguments
+    ///
+    /// * `port` - Fan port number (1-based)
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing (speed_percentage, rpm).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if communication fails or the port is invalid.
     pub fn get_data(&self, port: u8) -> Result<(u8, u16)> {
         match self.request(Command::GetData { port })? {
             Response::Data { speed, rpm } => Ok((speed, rpm)),
@@ -73,6 +142,17 @@ impl<Io: DeviceIO> Controller<Io> {
         }
     }
 
+    /// Sets RGB lighting for a specific fan port.
+    ///
+    /// # Arguments
+    ///
+    /// * `port` - Fan port number (1-based)
+    /// * `mode` - RGB mode (typically 0x24 for static color)
+    /// * `colors` - Vector of RGB color tuples (red, green, blue)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if communication fails or parameters are invalid.
     pub fn set_rgb(&self, port: u8, mode: u8, colors: Vec<(u8, u8, u8)>) -> Result<()> {
         match self.request(Command::SetRgb { port, mode, colors })? {
             Response::Status(0xFC) => Ok(()),
@@ -82,6 +162,19 @@ impl<Io: DeviceIO> Controller<Io> {
 }
 
 impl Fan {
+    /// Computes fan speed based on temperature using the active curve.
+    ///
+    /// # Arguments
+    ///
+    /// * `temp` - Current temperature in Celsius
+    ///
+    /// # Returns
+    ///
+    /// Computed fan speed percentage (0-100).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the active curve is not found or computation fails.
     pub fn compute_speed(&self, temp: f32) -> Result<u8> {
         match self
             .curve
@@ -114,11 +207,26 @@ impl Fan {
         }
     }
 
+    /// Updates the fan's current speed and RPM statistics.
+    ///
+    /// # Arguments
+    ///
+    /// * `speed` - Current speed percentage
+    /// * `rpm` - Current RPM reading
     pub fn update_stats(&mut self, speed: u8, rpm: u16) {
         self.current_rpm = rpm;
         self.current_speed = speed;
     }
 
+    /// Switches to a different speed curve.
+    ///
+    /// # Arguments
+    ///
+    /// * `curve` - Name of the curve to activate
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the specified curve is not available.
     pub fn update_curve(&mut self, curve: &str) -> Result<()> {
         self.curve
             .get(curve)
@@ -129,6 +237,16 @@ impl Fan {
             .ok_or(anyhow!("Curve {curve} not found"))?
     }
 
+    /// Updates the data for a specific curve.
+    ///
+    /// # Arguments
+    ///
+    /// * `curve` - Name of the curve to update
+    /// * `curve_data` - New curve configuration
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the curve is not found.
     pub fn update_curve_data(&mut self, curve: &str, curve_data: &FanCurve) -> Result<()> {
         self.curve
             .get_mut(curve)
@@ -145,11 +263,26 @@ impl Fan {
             .ok_or(anyhow!("Curve not found"))
     }
 
+    /// Gets the name of the currently active curve.
+    ///
+    /// # Returns
+    ///
+    /// The name of the active curve.
     pub fn get_active_curve(&self) -> Result<String> {
         Ok(self.active_curve.clone())
     }
 }
 
+/// Computes a point on a Bezier curve at parameter t.
+///
+/// # Arguments
+///
+/// * `pts` - Array of 4 control points defining the Bezier curve
+/// * `t` - Parameter value (0.0 to 1.0)
+///
+/// # Returns
+///
+/// The computed point on the curve.
 fn compute_bezier_at_t(pts: &[Point], t: f32) -> Point {
     let u = 1.0 - t;
     let tt = t * t;
@@ -164,6 +297,19 @@ fn compute_bezier_at_t(pts: &[Point], t: f32) -> Point {
     (x, y).into()
 }
 
+/// Finds the fan speed for a given temperature using Bezier curve interpolation.
+///
+/// Uses binary search to find the parameter t where the curve's x-coordinate
+/// matches the given temperature, then returns the corresponding y-coordinate.
+///
+/// # Arguments
+///
+/// * `pts` - Array of 4 control points defining the Bezier curve
+/// * `temp` - Temperature to find speed for
+///
+/// # Returns
+///
+/// The interpolated fan speed for the given temperature.
 pub fn get_speed_for_temp(pts: &[Point], temp: f32) -> f32 {
     let mut t_low = 0.0_f32;
     let mut t_high = 1.0_f32;

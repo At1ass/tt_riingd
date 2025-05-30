@@ -1,30 +1,28 @@
+mod app_context;
+mod application;
 mod cli;
 mod config;
 mod controller;
+mod coordinator;
 mod drivers;
+mod event;
 mod fan_controller;
 mod fan_curve;
 mod interface;
 mod mappings;
+mod providers;
 mod sensors;
+mod task_manager;
 mod temperature_sensors;
-mod tasks;
-mod app_context;
 
-use std::{collections::HashMap, fs::File, path::PathBuf, sync::Arc};
+use std::{fs::File, path::PathBuf};
 
 use anyhow::{Result, anyhow};
-use app_context::AppContext;
+use application::Application;
 use clap::Parser;
 use daemonize::Daemonize;
-use event_listener::Listener;
-use log::{LevelFilter, info};
+use log::LevelFilter;
 use syslog::{BasicLogger, Facility, Formatter3164};
-use tasks::{spawn_color_task, spawn_monitoring_task};
-use tokio::sync::RwLock;
-use zbus::connection;
-
-use interface::DBusInterface;
 
 fn init_log() -> Result<()> {
     syslog::unix(Formatter3164 {
@@ -42,18 +40,21 @@ fn init_log() -> Result<()> {
 }
 
 fn into_daemon(daemonize: bool) -> Result<()> {
-    daemonize.then(|| File::create("/var/tmp/tt_riingd.log")
-        .and_then(|out| Ok((out.try_clone()?, out)))
-        .map_err(|e| anyhow!("{e}"))
-        .and_then(|(stderr, stdout)| {
-            Daemonize::new()
-                .pid_file("/tmp/tt_riingd.pid")
-                .stdout(stdout)
-                .stderr(stderr)
-                .start()
+    daemonize
+        .then(|| {
+            File::create("/var/tmp/tt_riingd.log")
+                .and_then(|out| Ok((out.try_clone()?, out)))
                 .map_err(|e| anyhow!("{e}"))
-        }))
-    .map_or(Ok(()), |res| res)
+                .and_then(|(stderr, stdout)| {
+                    Daemonize::new()
+                        .pid_file("/tmp/tt_riingd.pid")
+                        .stdout(stdout)
+                        .stderr(stderr)
+                        .start()
+                        .map_err(|e| anyhow!("{e}"))
+                })
+        })
+        .map_or(Ok(()), |res| res)
 }
 
 #[tokio::main]
@@ -62,57 +63,13 @@ async fn tokio_main(config_path: Option<PathBuf>) -> Result<()> {
     {
         console_subscriber::init();
     }
-    let AppContext {
-        cfg,
-        controllers,
-        sensors,
-        mapping,
-        colors,
-        color_mappings,
-    } = app_context::init_context(config_path).await?;
-
-    // First set
-    controllers.send_init().await?;
-
-    let stop = event_listener::Event::new();
-    let stop_listener = stop.listen();
-
-    let conn = connection::Builder::session()?
-        .name("io.github.tt_riingd")?
-        .serve_at(
-            "/io/github/tt_riingd",
-            DBusInterface {
-                controllers: controllers.clone(),
-                stop,
-                version: cfg.version.to_string(),
-            },
-        )?
+    let config_manager = config::ConfigManager::load(config_path).await?;
+    Application::builder()
+        .with_config_manager(config_manager)
         .build()
+        .await?
+        .run()
         .await?;
-
-    let _color = spawn_color_task(controllers.clone(), color_mappings.clone(), colors.clone());
-
-    let sensors_data = Arc::new(RwLock::new(HashMap::new()));
-    let _timer = spawn_monitoring_task(
-        sensors_data.clone(),
-        cfg.tick_seconds as u64,
-        controllers,
-        sensors,
-        mapping,
-    );
-
-    let _broadcast = if cfg.enable_broadcast {
-        Some(tasks::spawn_broadcast_task(
-            conn.clone(),
-            sensors_data.clone(),
-            cfg.broadcast_interval as u64,
-        ))
-    } else {
-        None
-    };
-
-    stop_listener.wait();
-    info!("Stopped");
 
     Ok(())
 }

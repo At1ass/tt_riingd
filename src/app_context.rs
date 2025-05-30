@@ -1,55 +1,144 @@
-use std::{path::PathBuf, sync::Arc};
+//! Application state and global context management.
 
-#[cfg(debug_assertions)]
-use log::info;
-use once_cell::sync::Lazy;
-use anyhow::Result;
+use std::{
+    collections::HashMap,
+    sync::{Arc, LazyLock},
+};
 
-use crate::{config::{self, ColorCfg}, controller, mappings::{ColorMapping, Mapping}, sensors::TemperatureSensor, temperature_sensors::lm_sensor};
+use tokio::sync::RwLock;
 
-pub struct AppContext {
-    pub cfg: config::Config,
-    pub controllers: controller::Controllers,
-    pub sensors: Vec<Box<dyn TemperatureSensor>>,
+use crate::{
+    config::{Config, ConfigManager},
+    controller,
+    mappings::{ColorMapping, Mapping},
+    sensors::TemperatureSensor,
+    temperature_sensors::lm_sensor,
+};
+
+/// Shared application state containing all runtime data.
+///
+/// This structure holds all the shared state needed by various services,
+/// including hardware controllers, sensors, mappings, and runtime data.
+/// All fields are wrapped in appropriate synchronization primitives for
+/// safe concurrent access.
+pub struct AppState {
+    /// Configuration manager for centralized config handling
+    pub config_manager: Arc<ConfigManager>,
+    /// Hardware controllers for fan management
+    pub controllers: Arc<RwLock<controller::Controllers>>,
+    /// Temperature sensors for monitoring
+    pub sensors: Arc<RwLock<Vec<Box<dyn TemperatureSensor>>>>,
+    /// Sensor-to-fan mappings
     pub mapping: Arc<Mapping>,
-    pub colors: Arc<Vec<ColorCfg>>,
+    /// Color-to-fan mappings
+    #[allow(dead_code)] // Used in future RGB color control features
     pub color_mappings: Arc<ColorMapping>,
+    /// Runtime sensor data cache
+    pub sensor_data: Arc<RwLock<HashMap<String, f32>>>,
 }
 
+/// Wrapper for lm-sensors library instance.
+///
+/// This wrapper is needed to implement Send + Sync for the lm-sensors
+/// library which doesn't implement these traits by default.
 pub struct LMSensorsRef(pub lm_sensors::LMSensors);
 
-unsafe impl Sync for LMSensorsRef {}
+// SAFETY: lm-sensors library (>= 3.6) uses internal global mutex for all operations.
+// The library is thread-safe but doesn't implement Send/Sync markers.
 unsafe impl Send for LMSensorsRef {}
+unsafe impl Sync for LMSensorsRef {}
 
-pub static LMSENSORS: Lazy<LMSensorsRef> = Lazy::new(|| {
-    LMSensorsRef(
-        lm_sensors::Initializer::default()
-            .initialize()
-            .expect("Cannot initialize lm-sensors"),
-    )
-});
+/// Global lm-sensors instance.
+///
+/// Initialized once at startup and shared across all temperature sensor instances.
+/// Uses LazyLock for thread-safe lazy initialization.
+/// Returns None if lm-sensors is not available on the system.
+pub static LMSENSORS: LazyLock<Option<LMSensorsRef>> =
+    LazyLock::new(|| match lm_sensors::Initializer::default().initialize() {
+        Ok(sensors) => {
+            log::info!("lm-sensors initialized successfully");
+            Some(LMSensorsRef(sensors))
+        }
+        Err(e) => {
+            log::warn!(
+                "lm-sensors not available: {}. Temperature monitoring will be limited.",
+                e
+            );
+            None
+        }
+    });
 
-pub async fn init_context(config_path: Option<PathBuf>) -> Result<AppContext> {
-    let config = config::load(config_path)?;
-    let controllers = controller::Controllers::init_from_cfg(&config)?;
-    let sensors = lm_sensor::LmSensorSource::discover(&LMSENSORS.0, &config.sensors)?;
+impl AppState {
+    /// Creates a new AppState from the given configuration manager.
+    ///
+    /// This performs synchronous initialization of hardware components.
+    /// For async initialization, use the AppStateProvider instead.
+    pub async fn new(config_manager: ConfigManager) -> anyhow::Result<Self> {
+        let config = config_manager.clone_config().await;
 
-    #[cfg(debug_assertions)]
-    {
-        info!("Loaded {} temperature sensors", sensors.len());
+        Ok(Self {
+            controllers: Arc::new(RwLock::new(
+                controller::Controllers::init_from_cfg(&config)
+                    .map_err(|e| anyhow::anyhow!("Failed to initialize controllers: {}", e))?,
+            )),
+            sensors: Arc::new(RwLock::new(match LMSENSORS.as_ref() {
+                Some(lms) => lm_sensor::LmSensorSource::discover(&lms.0, &config.sensors),
+                None => {
+                    log::warn!(
+                        "lm-sensors not available, no temperature sensors will be discovered"
+                    );
+                    Vec::new()
+                }
+            })),
+            mapping: Arc::new(Mapping::load_mappings(&config.mappings)),
+            color_mappings: Arc::new(ColorMapping::build_color_mapping(&config.color_mappings)),
+            sensor_data: Arc::new(RwLock::new(HashMap::new())),
+            config_manager: Arc::new(config_manager),
+        })
     }
 
-    let mapping = Arc::new(Mapping::load_mappings(&config.mappings));
-    let colors = Arc::new(config.colors.clone());
-    let color_mappings = Arc::new(ColorMapping::build_color_mapping(&config.color_mappings));
+    /// Gets a read-only reference to the current configuration.
+    pub async fn config(&self) -> tokio::sync::RwLockReadGuard<'_, Config> {
+        self.config_manager.get().await
+    }
 
-    Ok(AppContext {
-        cfg: config,
-        controllers,
-        sensors,
-        mapping,
-        colors,
-        color_mappings,
-    })
+    /// Gets the configuration manager.
+    pub fn config_manager(&self) -> &Arc<ConfigManager> {
+        &self.config_manager
+    }
+
+    /// Reloads configuration and updates dependent components.
+    ///
+    /// This method handles the complex process of reloading configuration
+    /// and updating all dependent components (controllers, sensors, mappings).
+    pub async fn reload_config(&self) -> anyhow::Result<()> {
+        // Reload configuration
+        self.config_manager.reload().await?;
+
+        // Get the new configuration
+        let new_config = self.config_manager.clone_config().await;
+
+        // Update controllers
+        let new_controllers = controller::Controllers::init_from_cfg(&new_config)
+            .map_err(|e| anyhow::anyhow!("Failed to reinitialize controllers: {}", e))?;
+        *self.controllers.write().await = new_controllers;
+
+        // Update sensors
+        let new_sensors = match LMSENSORS.as_ref() {
+            Some(lms) => lm_sensor::LmSensorSource::discover(&lms.0, &new_config.sensors),
+            None => {
+                log::warn!("lm-sensors not available for config reload");
+                Vec::new()
+            }
+        };
+        *self.sensors.write().await = new_sensors;
+
+        // Update mappings (need to replace the Arc)
+        // Note: This is a limitation - mappings can't be hot-reloaded easily
+        // because they're wrapped in Arc. This could be improved in future versions.
+        log::warn!("Mappings require restart to update - hot reload limitation");
+
+        log::info!("Configuration reloaded successfully");
+        Ok(())
+    }
 }
-
