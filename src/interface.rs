@@ -8,7 +8,7 @@ use serde_json::from_str;
 use zbus::{interface, object_server::SignalEmitter};
 
 use crate::app_context::AppState;
-use crate::event::{Event, EventBus};
+use crate::event::{ConfigChangeType, Event, EventBus};
 use crate::fan_curve::FanCurve;
 
 /// D-Bus interface for external control of the tt_riingd daemon.
@@ -66,11 +66,34 @@ impl DBusInterface {
         Ok(sensor_data.clone())
     }
 
-    /// Triggers a configuration reload.
-    async fn reload_config(&self) -> zbus::fdo::Result<()> {
-        self.event_bus
-            .publish(Event::ConfigReloaded)
-            .map_err(|e| zbus::fdo::Error::Failed(format!("Failed to publish reload event: {e}")))
+    /// Analyzes and applies configuration changes.
+    /// 
+    /// This method analyzes the current configuration file for changes
+    /// and applies them if they are hot-reloadable, or provides feedback
+    /// if a restart is required.
+    async fn reload_config(&self) -> zbus::fdo::Result<String> {
+        match self.app_state.config_manager().analyze_config_changes().await {
+            Ok(change_type) => {
+                let result = match &change_type {
+                    ConfigChangeType::HotReload => {
+                        "Configuration changes applied successfully (hot reload)".to_string()
+                    }
+                    ConfigChangeType::ColdRestart { changed_sections } => {
+                        format!(
+                            "Hardware configuration changes detected in sections: {:?}. Daemon restart required: 'sudo systemctl restart tt_riingd'",
+                            changed_sections
+                        )
+                    }
+                };
+                
+                if let Err(e) = self.event_bus.publish(Event::ConfigChangeDetected(change_type)) {
+                    return Err(zbus::fdo::Error::Failed(format!("Failed to publish config change event: {e}")));
+                }
+                
+                Ok(result)
+            }
+            Err(e) => Err(zbus::fdo::Error::Failed(format!("Failed to analyze configuration changes: {e}")))
+        }
     }
 
     /// Switches the active curve for a controller channel.

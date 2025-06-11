@@ -526,7 +526,9 @@ mod tests {
 
         // Send some events that might cause issues
         let _ = event_bus.publish(Event::SystemShutdown); // May fail if no subscribers
-        let _ = event_bus.publish(Event::ConfigReloaded); // May fail if no subscribers
+        let _ = event_bus.publish(Event::ConfigChangeDetected(
+            crate::event::ConfigChangeType::HotReload
+        )); // May fail if no subscribers
 
         // Service should continue running despite irrelevant events
         sleep(Duration::from_millis(100)).await;

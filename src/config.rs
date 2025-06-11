@@ -14,6 +14,8 @@ use std::{
 };
 use tokio::sync::RwLock;
 
+use crate::event::ConfigChangeType;
+
 /// Main configuration structure for the tt_riingd daemon.
 ///
 /// Contains all configuration parameters including controllers, curves,
@@ -86,7 +88,7 @@ pub struct Config {
 ///
 /// Defines different types of hardware controllers that can be managed
 /// by the daemon. Currently supports Thermaltake Riing Quad controllers.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ControllerCfg {
     /// Thermaltake Riing Quad controller configuration.
@@ -107,7 +109,7 @@ pub enum ControllerCfg {
 ///
 /// Defines the settings for a specific fan including its identification,
 /// active curve, and available curves.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FanCfg {
     /// Fan index on the controller (1-based).
     pub idx: u8,
@@ -263,6 +265,37 @@ impl Config {
     pub fn find_curve(&self, id: &str) -> Option<&CurveCfg> {
         self.curves.iter().find(|curve| curve.get_id() == id)
     }
+
+    /// Analyzes differences between this config and another to determine reload type.
+    ///
+    /// Returns ConfigChangeType indicating whether changes can be hot-reloaded
+    /// or require a daemon restart.
+    pub fn analyze_changes(&self, other: &Config) -> ConfigChangeType {
+        let mut changed_sections = Vec::new();
+        
+        // Hardware controller changes always require restart
+        // This includes any controller addition, removal, or configuration change
+        if self.controllers != other.controllers {
+            changed_sections.push("controllers".to_string());
+        }
+        
+        // Hardware sensor changes require restart
+        if self.sensors != other.sensors {
+            changed_sections.push("sensors".to_string());
+        }
+        
+        if changed_sections.is_empty() {
+            // Only hot-reloadable settings changed:
+            // - Fan curves (curves)
+            // - Sensor-to-fan mappings (mappings) 
+            // - RGB color definitions (colors)
+            // - Color-to-fan mappings (color_mappings)
+            // - Operational settings (tick_seconds, enable_broadcast, broadcast_interval)
+            ConfigChangeType::HotReload
+        } else {
+            ConfigChangeType::ColdRestart { changed_sections }
+        }
+    }
 }
 
 /// Mapping configuration between sensors and fan targets.
@@ -323,7 +356,7 @@ mod defaults {
 ///
 /// Specifies USB vendor/product IDs and optional serial number
 /// for identifying specific hardware controllers.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UsbSelector {
     /// USB Vendor ID.
     pub vid: u16,
@@ -340,7 +373,7 @@ pub struct UsbSelector {
 ///
 /// Defines different types of temperature sensors that can be monitored.
 /// Currently supports lm-sensors hardware monitoring.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum SensorCfg {
     /// lm-sensors hardware monitoring configuration.
@@ -480,6 +513,17 @@ impl ConfigManager {
         *self.config.write().await = new_config;
         info!("Configuration reloaded successfully");
         Ok(())
+    }
+
+    /// Analyzes configuration changes and returns the type of reload required.
+    ///
+    /// Compares the current configuration with a new one from file
+    /// to determine if hot-reload is possible or restart is required.
+    pub async fn analyze_config_changes(&self) -> Result<ConfigChangeType> {
+        let current_config = self.config.read().await;
+        let new_config = Self::load_config_from_path(&self.path).await?;
+        
+        Ok(current_config.analyze_changes(&new_config))
     }
 
     /// Saves the current configuration to file.
@@ -777,22 +821,130 @@ color_mappings:
     #[test]
     fn curve_cfg_get_id() {
         let constant = CurveCfg::Constant {
-            id: "constant_id".to_string(),
-            speed: 75,
+            id: "test_constant".to_string(),
+            speed: 50,
         };
-        assert_eq!(constant.get_id(), "constant_id");
+        assert_eq!(constant.get_id(), "test_constant");
 
         let step = CurveCfg::StepCurve {
-            id: "step_id".to_string(),
-            tmps: vec![30.0],
-            spds: vec![50],
+            id: "test_step".to_string(),
+            tmps: vec![30.0, 60.0],
+            spds: vec![20, 80],
         };
-        assert_eq!(step.get_id(), "step_id");
+        assert_eq!(step.get_id(), "test_step");
 
         let bezier = CurveCfg::Bezier {
-            id: "bezier_id".to_string(),
+            id: "test_bezier".to_string(),
             points: vec![Point { x: 0.0, y: 0.0 }],
         };
-        assert_eq!(bezier.get_id(), "bezier_id");
+        assert_eq!(bezier.get_id(), "test_bezier");
+    }
+
+    #[test]
+    fn analyze_changes_hot_reload_for_curves() {
+        let mut config1 = Config::default();
+        let mut config2 = Config::default();
+        
+        // Add different curves
+        config1.curves = vec![CurveCfg::Constant {
+            id: "test".to_string(),
+            speed: 50,
+        }];
+        
+        config2.curves = vec![CurveCfg::Constant {
+            id: "test".to_string(),
+            speed: 75, // Changed speed
+        }];
+
+        let change_type = config1.analyze_changes(&config2);
+        match change_type {
+            ConfigChangeType::HotReload => {
+                // Expected - curves can be hot-reloaded
+            }
+            _ => panic!("Expected HotReload for curve changes"),
+        }
+    }
+
+    #[test]
+    fn analyze_changes_cold_restart_for_controllers() {
+        let config1 = Config::default();
+        let mut config2 = Config::default();
+        
+        // Add controller to second config
+        config2.controllers = vec![ControllerCfg::RiingQuad {
+            id: "test_controller".to_string(),
+            usb: UsbSelector {
+                vid: 0x264a,
+                pid: 0x2330,
+                serial: None,
+            },
+            fans: vec![],
+        }];
+
+        let change_type = config1.analyze_changes(&config2);
+        match change_type {
+            ConfigChangeType::ColdRestart { changed_sections } => {
+                assert!(changed_sections.contains(&"controllers".to_string()));
+            }
+            _ => panic!("Expected ColdRestart for controller changes"),
+        }
+    }
+
+    #[test]
+    fn analyze_changes_cold_restart_for_sensors() {
+        let config1 = Config::default();
+        let mut config2 = Config::default();
+        
+        // Add sensor to second config
+        config2.sensors = vec![SensorCfg::LmSensors {
+            id: "test_sensor".to_string(),
+            chip: "k10temp-pci-00c3".to_string(),
+            feature: "Tctl".to_string(),
+        }];
+
+        let change_type = config1.analyze_changes(&config2);
+        match change_type {
+            ConfigChangeType::ColdRestart { changed_sections } => {
+                assert!(changed_sections.contains(&"sensors".to_string()));
+            }
+            _ => panic!("Expected ColdRestart for sensor changes"),
+        }
+    }
+
+    #[test]
+    fn analyze_changes_hot_reload_for_mappings() {
+        let config1 = Config::default();
+        let mut config2 = Config::default();
+        
+        // Add mapping to second config
+        config2.mappings = vec![MappingCfg {
+            sensor: "cpu_temp".to_string(),
+            targets: vec![FanTarget {
+                controller: 1,
+                fan_idx: 1,
+            }],
+        }];
+
+        let change_type = config1.analyze_changes(&config2);
+        match change_type {
+            ConfigChangeType::HotReload => {
+                // Expected - mappings can be hot-reloaded
+            }
+            _ => panic!("Expected HotReload for mapping changes"),
+        }
+    }
+
+    #[test]
+    fn analyze_changes_no_changes() {
+        let config1 = Config::default();
+        let config2 = Config::default();
+
+        let change_type = config1.analyze_changes(&config2);
+        match change_type {
+            ConfigChangeType::HotReload => {
+                // Expected - no changes means hot reload is safe
+            }
+            _ => panic!("Expected HotReload for identical configs"),
+        }
     }
 }

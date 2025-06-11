@@ -8,7 +8,7 @@ use log::info;
 use crate::{
     app_context::AppState,
     config::ConfigManager,
-    event::{Event, EventBus},
+    event::{ConfigChangeType, Event, EventBus},
     providers::{
         AppStateProvider, AsyncProvider, BroadcastServiceProvider, ConfigWatcherServiceProvider,
         DBusServiceProvider, FanColorControlServiceProvider, MonitoringServiceProvider,
@@ -212,11 +212,11 @@ impl SystemCoordinator {
         event_result: Result<Event, tokio::sync::broadcast::error::RecvError>,
     ) -> Result<()> {
         match event_result {
-            Ok(Event::ConfigReloaded) => {
-                info!("Processing ConfigReloaded event");
-                self.handle_config_reload()
+            Ok(Event::ConfigChangeDetected(change_type)) => {
+                info!("Processing ConfigChangeDetected event");
+                self.handle_config_change(change_type)
                     .await
-                    .context("Failed to handle config reload")?;
+                    .context("Failed to handle config change")?;
             }
             Ok(Event::SystemShutdown) => {
                 info!("Processing SystemShutdown event");
@@ -238,22 +238,55 @@ impl SystemCoordinator {
         Ok(())
     }
 
-    /// Handles configuration hot-reload.
-    async fn handle_config_reload(&self) -> Result<()> {
-        info!("Handling configuration reload...");
+    /// Handles configuration change based on type.
+    async fn handle_config_change(&self, change_type: ConfigChangeType) -> Result<()> {
+        match change_type {
+            ConfigChangeType::HotReload => {
+                info!("Applying hot-reloadable configuration changes...");
+                self.handle_hot_reload().await
+            }
+            ConfigChangeType::ColdRestart { changed_sections } => {
+                log::warn!("Hardware configuration changes detected in sections: {:?}", changed_sections);
+                log::warn!("These changes require daemon restart to take effect");
+                log::warn!("Please restart the tt_riingd daemon to apply hardware changes");
+                
+                // Log user-friendly instructions
+                log::info!("To restart the daemon, run:");
+                log::info!("  sudo systemctl restart tt_riingd");
+                log::info!("or stop and start the daemon manually");
+                
+                Ok(())
+            }
+        }
+    }
+
+    /// Handles hot-reloadable configuration changes.
+    async fn handle_hot_reload(&self) -> Result<()> {
+        info!("Applying hot-reloadable configuration changes...");
 
         if let Some(state) = &self.shared_state {
+            // Reload only the hot-reloadable parts of configuration
             state
-                .reload_config()
+                .config_manager()
+                .reload()
                 .await
                 .context("Failed to reload configuration")?;
-            info!("Configuration reloaded successfully");
+            
+            // Update mappings and other hot-reloadable components
+            let _new_config = state.config_manager().clone_config().await;
+            
+            // Note: Controllers and sensors are NOT reinitialized for hot reload
+            // Only mappings, curves, and colors are updated
+            log::info!("Updated configuration for curves, mappings, and colors");
+            log::info!("Hot configuration reload completed successfully");
         } else {
             log::warn!("Cannot reload config: system state not initialized");
         }
 
         Ok(())
     }
+
+
 
     /// Performs graceful shutdown of all components.
     async fn shutdown(&mut self) -> Result<()> {

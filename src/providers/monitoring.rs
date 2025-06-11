@@ -81,7 +81,7 @@ impl ServiceProvider for MonitoringServiceProvider {
     }
 
     fn is_critical(&self) -> bool {
-        true
+        false
     }
 }
 

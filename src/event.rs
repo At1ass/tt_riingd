@@ -5,14 +5,26 @@ use std::collections::HashMap;
 use anyhow::Result;
 use tokio::sync::broadcast;
 
+/// Type of configuration change detected
+#[derive(Debug, Clone)]
+pub enum ConfigChangeType {
+    /// Configuration changes that can be applied without restart
+    HotReload,
+    /// Configuration changes that require full daemon restart
+    ColdRestart {
+        /// List of changed hardware-related sections
+        changed_sections: Vec<String>,
+    },
+}
+
 /// Application events for inter-service communication.
 ///
 /// Events are published through the EventBus and consumed by interested services.
 /// This enables loose coupling between components.
 #[derive(Debug, Clone)]
 pub enum Event {
-    #[allow(dead_code)] // Used in coordinator for hot reload
-    ConfigReloaded,
+    /// Configuration change detection with type classification
+    ConfigChangeDetected(ConfigChangeType),
     SystemShutdown,
     TemperatureChanged(HashMap<String, f32>),
     ColorChanged,
@@ -200,7 +212,7 @@ mod tests {
         let event_bus = EventBus::new();
 
         // Publishing without any subscribers should return an error
-        let result = event_bus.publish(Event::ConfigReloaded);
+        let result = event_bus.publish(Event::ConfigChangeDetected(ConfigChangeType::HotReload));
         assert!(result.is_err());
     }
 
@@ -235,7 +247,7 @@ mod tests {
         let mut receiver = event_bus.subscribe();
 
         // Publish multiple events in sequence
-        event_bus.publish(Event::ConfigReloaded).unwrap();
+        event_bus.publish(Event::ConfigChangeDetected(ConfigChangeType::HotReload)).unwrap();
         event_bus.publish(Event::ColorChanged).unwrap();
         event_bus.publish(Event::SystemShutdown).unwrap();
 
@@ -246,7 +258,7 @@ mod tests {
 
         // Verify order
         match (event1, event2, event3) {
-            (Event::ConfigReloaded, Event::ColorChanged, Event::SystemShutdown) => {}
+            (Event::ConfigChangeDetected(ConfigChangeType::HotReload), Event::ColorChanged, Event::SystemShutdown) => {}
             _ => panic!("Events should be received in publication order"),
         }
     }

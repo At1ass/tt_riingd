@@ -79,9 +79,10 @@ impl<Io: DeviceIO> Controller<Io> {
     ///
     /// Returns an error if the controller fails to initialize or communication fails.
     pub fn init(&self) -> Result<()> {
-        match self.request(Command::Init)? {
-            Response::Status(0xFC) => Ok(()),
-            _ => Err(anyhow!("Invalid init response")),
+        match self.request(Command::Init) {
+            Ok(Response::Status(0xFC)) => Ok(()),
+            Ok(_) => Err(anyhow!("Invalid init response: Expected status 0xFC")),
+            Err(e) => Err(anyhow!("Invalid init response: {e}")),
         }
     }
 
@@ -116,9 +117,10 @@ impl<Io: DeviceIO> Controller<Io> {
     ///
     /// Returns an error if communication fails or the port is invalid.
     pub fn set_speed(&self, port: u8, speed: u8) -> Result<()> {
-        match self.request(Command::SetSpeed { port, speed })? {
-            Response::Status(0xFC) => Ok(()),
-            _ => Err(anyhow!("Invalid set speed responce")),
+        match self.request(Command::SetSpeed { port, speed }) {
+            Ok(Response::Status(0xFC)) => Ok(()),
+            Ok(_) => Err(anyhow!("Invalid set speed response: Expected status 0xFC")),
+            Err(e) => Err(anyhow!("Invalid set speed responce: {e}")),
         }
     }
 
@@ -136,9 +138,10 @@ impl<Io: DeviceIO> Controller<Io> {
     ///
     /// Returns an error if communication fails or the port is invalid.
     pub fn get_data(&self, port: u8) -> Result<(u8, u16)> {
-        match self.request(Command::GetData { port })? {
-            Response::Data { speed, rpm } => Ok((speed, rpm)),
-            _ => Err(anyhow!("Invalid get speed responce")),
+        match self.request(Command::GetData { port }) {
+            Ok(Response::Data { speed, rpm }) => Ok((speed, rpm)),
+            Ok(_) => Err(anyhow!("Invalid get data response: Expected Data")),
+            Err(e) => Err(anyhow!("Invalid get speed responce: {e}")),
         }
     }
 
@@ -154,9 +157,10 @@ impl<Io: DeviceIO> Controller<Io> {
     ///
     /// Returns an error if communication fails or parameters are invalid.
     pub fn set_rgb(&self, port: u8, mode: u8, colors: Vec<(u8, u8, u8)>) -> Result<()> {
-        match self.request(Command::SetRgb { port, mode, colors })? {
-            Response::Status(0xFC) => Ok(()),
-            _ => Err(anyhow!("Invalid set rgb responce")),
+        match self.request(Command::SetRgb { port, mode, colors }) {
+            Ok(Response::Status(0xFC)) => Ok(()),
+            Ok(_) => Err(anyhow!("Invalid set rgb response: Expected status 0xFC")),
+            Err(e) => Err(anyhow!("Invalid set rgb responce: {e}")),
         }
     }
 }

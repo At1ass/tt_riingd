@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     app_context::AppState,
-    event::{Event as AppEvent, EventBus},
+    event::{ConfigChangeType, Event as AppEvent, EventBus},
     providers::traits::ServiceProvider,
     task_manager::TaskManager,
 };
@@ -207,16 +207,39 @@ async fn run_config_watcher_service(
             }
 
             _ = debounce_interval.tick(), if has_pending_event => {
-                debug!("Debounce interval elapsed, processing config reload");
+                debug!("Debounce interval elapsed, processing config change analysis");
                 has_pending_event = false;
 
                 if config_path.exists() {
-                    info!("Configuration file change detected, triggering reload");
+                    info!("Configuration file change detected, analyzing changes...");
 
-                    if let Err(e) = event_bus.publish(AppEvent::ConfigReloaded) {
-                        error!("Failed to publish config reload event: {}", e);
-                    } else {
-                        info!("Published configuration reload event");
+                    match state.config_manager().analyze_config_changes().await {
+                        Ok(change_type) => {
+                            match &change_type {
+                                ConfigChangeType::HotReload => {
+                                    info!("Hot-reloadable changes detected");
+                                    if let Err(e) = event_bus.publish(AppEvent::ConfigChangeDetected(change_type)) {
+                                        error!("Failed to publish config change event: {}", e);
+                                    } else {
+                                        info!("Published hot-reload configuration change event");
+                                    }
+                                }
+                                ConfigChangeType::ColdRestart { changed_sections } => {
+                                    warn!("Hardware configuration changes detected in sections: {:?}", changed_sections);
+                                    warn!("These changes require daemon restart to take effect");
+                                    info!("Configuration will not be reloaded to prevent hardware conflicts");
+                                    
+                                    if let Err(e) = event_bus.publish(AppEvent::ConfigChangeDetected(change_type)) {
+                                        error!("Failed to publish config change event: {}", e);
+                                    } else {
+                                        info!("Published cold-restart configuration change event");
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to analyze configuration changes: {}", e);
+                        }
                     }
                 } else {
                     warn!("Configuration file {} no longer exists", config_path.display());
@@ -320,17 +343,17 @@ mod tests {
             );
 
             match retry_result.unwrap() {
-                Ok(AppEvent::ConfigReloaded) => {
+                Ok(AppEvent::ConfigChangeDetected(_)) => {
                     // Test passed - we received the expected event
                 }
-                other => panic!("Expected ConfigReloaded event, got: {:?}", other),
+                other => panic!("Expected ConfigChangeDetected event, got: {:?}", other),
             }
         } else {
             match event_result.unwrap() {
-                Ok(AppEvent::ConfigReloaded) => {
+                Ok(AppEvent::ConfigChangeDetected(_)) => {
                     // Test passed - we received the expected event
                 }
-                other => panic!("Expected ConfigReloaded event, got: {:?}", other),
+                other => panic!("Expected ConfigChangeDetected event, got: {:?}", other),
             }
         }
 

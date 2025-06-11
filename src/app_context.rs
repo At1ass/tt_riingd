@@ -107,38 +107,5 @@ impl AppState {
         &self.config_manager
     }
 
-    /// Reloads configuration and updates dependent components.
-    ///
-    /// This method handles the complex process of reloading configuration
-    /// and updating all dependent components (controllers, sensors, mappings).
-    pub async fn reload_config(&self) -> anyhow::Result<()> {
-        // Reload configuration
-        self.config_manager.reload().await?;
 
-        // Get the new configuration
-        let new_config = self.config_manager.clone_config().await;
-
-        // Update controllers
-        let new_controllers = controller::Controllers::init_from_cfg(&new_config)
-            .map_err(|e| anyhow::anyhow!("Failed to reinitialize controllers: {}", e))?;
-        *self.controllers.write().await = new_controllers;
-
-        // Update sensors
-        let new_sensors = match LMSENSORS.as_ref() {
-            Some(lms) => lm_sensor::LmSensorSource::discover(&lms.0, &new_config.sensors),
-            None => {
-                log::warn!("lm-sensors not available for config reload");
-                Vec::new()
-            }
-        };
-        *self.sensors.write().await = new_sensors;
-
-        // Update mappings (need to replace the Arc)
-        // Note: This is a limitation - mappings can't be hot-reloaded easily
-        // because they're wrapped in Arc. This could be improved in future versions.
-        log::warn!("Mappings require restart to update - hot reload limitation");
-
-        log::info!("Configuration reloaded successfully");
-        Ok(())
-    }
 }
