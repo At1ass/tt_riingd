@@ -10,9 +10,36 @@ use tokio::sync::{Mutex, MutexGuard};
 
 use super::controller::{Controller, Fan};
 
+/// Thermaltake Vendor ID for HID devices.
 pub const VID: u16 = 0x264A; // Thermaltake
+
+/// Default fan speed percentage used during initialization.
 pub const DEFAULT_PERCENT: u8 = 50;
 
+/// Thermaltake Riing Quad fan controller implementation.
+///
+/// Provides hardware control for Thermaltake Riing Quad fan controllers
+/// via HID interface. Supports up to 5 fans per controller with independent
+/// speed curves and RGB lighting control.
+///
+/// # Example
+///
+/// ```no_run
+/// use hidapi::HidApi;
+/// use tt_riingd::drivers::tt_riing_quad::TTRiingQuad;
+/// use tt_riingd::fan_controller::FanController;
+///
+/// # async fn example() -> anyhow::Result<()> {
+/// let api = HidApi::new()?;
+/// let controllers = TTRiingQuad::probe(&api, 50)?;
+///
+/// for controller in controllers {
+///     controller.send_init().await?;
+///     controller.update_speeds(45.0).await?;
+/// }
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Debug)]
 pub struct TTRiingQuad(Arc<Mutex<Controller<HidDevice>>>);
 
@@ -104,6 +131,23 @@ impl FanController for TTRiingQuad {
 }
 
 impl TTRiingQuad {
+    /// Auto-detects and creates controllers for all connected Thermaltake devices.
+    ///
+    /// Scans for all HID devices with Thermaltake vendor ID and creates
+    /// controller instances with default configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `api` - HID API instance for device communication
+    /// * `speed` - Initial fan speed percentage (0-100)
+    ///
+    /// # Returns
+    ///
+    /// A vector of boxed FanController trait objects for each detected device.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if HID communication fails during device enumeration.
     pub fn probe(api: &HidApi, speed: u8) -> Result<Vec<Box<dyn FanController>>> {
         Ok(api
             .device_list()
@@ -129,6 +173,24 @@ impl TTRiingQuad {
             .collect())
     }
 
+    /// Creates controllers from configuration specifications.
+    ///
+    /// Initializes controllers based on the provided configuration, including
+    /// specific device selection via USB identifiers and custom fan curves.
+    ///
+    /// # Arguments
+    ///
+    /// * `api` - HID API instance for device communication
+    /// * `ctrl_cfg` - Array of controller configurations from config file
+    /// * `curve_map` - Map of curve names to curve definitions
+    ///
+    /// # Returns
+    ///
+    /// A vector of boxed FanController trait objects matching the configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if specified devices cannot be opened or configuration is invalid.
     #[allow(irrefutable_let_patterns)]
     pub fn find_controllers(
         api: &HidApi,
@@ -177,6 +239,7 @@ impl TTRiingQuad {
             info!("Computed speed for fan {}: {}", idx + 1, speed);
         }
         let ctrl = self.0.clone();
+        // let (speed, rpm) = tokio::time::timeout(std::time::Duration::from_millis(READ_TIMEOUT as _), async move {
         let (speed, rpm) = tokio::task::spawn_blocking(move || {
             let guard = ctrl.blocking_lock();
             #[cfg(debug_assertions)]
@@ -198,21 +261,20 @@ impl TTRiingQuad {
 
     async fn process_fan_color(&self, idx: usize, green: u8, red: u8, blue: u8) -> Result<()> {
         let ctrl = self.0.clone();
+
         tokio::task::spawn_blocking(move || {
             let guard = ctrl.blocking_lock();
-            #[cfg(debug_assertions)]
-            {
-                info!("Setting color fan {} on controller {}", idx + 1, guard.name,);
-            }
             Self::proccess_fan_inner_color(guard, idx, green, red, blue)
         })
-        .await?
+        .await??;
+
+        Ok(())
     }
+
     async fn read(&self) -> MutexGuard<'_, Controller<HidDevice>> {
         self.0.lock().await
     }
 
-    #[inline(never)]
     fn proccess_fan_inner(
         guard: MutexGuard<'_, Controller<HidDevice>>,
         idx: usize,
@@ -222,7 +284,6 @@ impl TTRiingQuad {
         guard.get_data((idx + 1) as u8)
     }
 
-    #[inline(never)]
     fn proccess_fan_inner_color(
         guard: MutexGuard<'_, Controller<HidDevice>>,
         idx: usize,
@@ -234,6 +295,10 @@ impl TTRiingQuad {
     }
 }
 
+/// Creates default fan curves for controller initialization.
+///
+/// Provides standard curve definitions including constant speed,
+/// step-based curves, and Bezier curves for initial controller setup.
 fn build_default_curves() -> HashMap<String, FanCurve> {
     HashMap::from([
         (

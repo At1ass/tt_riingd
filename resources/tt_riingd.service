@@ -1,0 +1,15 @@
+[Unit]
+Description=Thermaltake Riing Fan Control Daemon
+After=graphical-session.target
+Wants=graphical-session.target
+
+[Service]
+Type=dbus
+BusName=io.github.tt_riingd
+ExecStart=%h/.local/bin/tt_riingd --config %h/.config/tt_riingd/config.yml
+Restart=on-failure
+RestartSec=5s
+Environment=XDG_RUNTIME_DIR=%t
+
+[Install]
+WantedBy=default.target

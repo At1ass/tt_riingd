@@ -8,4 +8,8 @@ pub struct Cli {
     /// YAML config file path (default: /etc/config.yml)
     #[arg(short = 'c', long = "config")]
     pub config: Option<PathBuf>,
+
+    /// Run in foreground mode with daemonizing
+    #[arg(short = 'd', long = "daemonize", default_value = "false")]
+    pub daemonize: bool,
 }
