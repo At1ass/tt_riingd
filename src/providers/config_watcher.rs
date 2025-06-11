@@ -228,7 +228,7 @@ async fn run_config_watcher_service(
                                     warn!("Hardware configuration changes detected in sections: {:?}", changed_sections);
                                     warn!("These changes require daemon restart to take effect");
                                     info!("Configuration will not be reloaded to prevent hardware conflicts");
-                                    
+
                                     if let Err(e) = event_bus.publish(AppEvent::ConfigChangeDetected(change_type)) {
                                         error!("Failed to publish config change event: {}", e);
                                     } else {

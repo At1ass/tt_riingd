@@ -52,10 +52,10 @@ pub struct ColorMapping {
 }
 
 impl ColorMapping {
-    /// Builds color mappings from configuration.
+    /// Builds color mapping from configuration array.
     ///
-    /// Creates the internal mapping structure from color mapping configuration,
-    /// establishing relationships between colors and fan targets.
+    /// Creates the mapping structure from color mapping configuration,
+    /// establishing relationships between color names and fan targets.
     ///
     /// # Arguments
     ///
@@ -80,6 +80,12 @@ impl ColorMapping {
                 acc.color2fans.entry(sensor).or_default().insert(fan);
                 acc
             })
+    }
+
+    pub fn color_to_fans_iter(&self) -> impl Iterator<Item = (String, DashSet<FanRef>)> {
+        self.color2fans
+            .iter()
+            .map(|r| (r.key().clone(), r.value().clone()))
     }
 }
 
@@ -267,20 +273,6 @@ pub fn resolve_mappings(
 /// let colors = HashMap::new(); // Available colors
 /// let resolved = resolve_color_mappings(&temps, &color_mappings, &colors);
 /// ```
-#[allow(dead_code)]
-pub fn resolve_color_mappings(
-    _temperatures: &HashMap<String, f32>,
-    _color_mappings: &[ColorMappingCfg],
-    _colors: &HashMap<String, [u8; 3]>,
-) -> HashMap<(u8, u8), [u8; 3]> {
-    // Placeholder implementation
-    #[allow(dead_code)]
-    let _result: HashMap<(u8, u8), [u8; 3]> = HashMap::new();
-
-    // TODO: Implement color mapping resolution based on temperature
-    HashMap::new()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -578,19 +570,6 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert_eq!(result.get(&(255, 255)), Some(&50.0));
         assert_eq!(result.get(&(0, 0)), Some(&50.0));
-    }
-
-    #[test]
-    fn resolve_color_mappings_placeholder() {
-        // Test the placeholder implementation
-        let temperatures = HashMap::new();
-        let color_mappings = vec![];
-        let colors = HashMap::new();
-
-        let result = resolve_color_mappings(&temperatures, &color_mappings, &colors);
-
-        // Should be empty since it's a placeholder
-        assert_eq!(result.len(), 0);
     }
 
     #[test]

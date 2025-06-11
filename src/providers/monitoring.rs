@@ -81,7 +81,7 @@ impl ServiceProvider for MonitoringServiceProvider {
     }
 
     fn is_critical(&self) -> bool {
-        false
+        true
     }
 }
 
@@ -124,7 +124,7 @@ async fn collect_and_process_temperatures(
                 temperatures.insert(sensor_name.clone(), temp);
                 info!("Temperature of {sensor_name}: {temp:.2}°C");
 
-                for fan in state.mapping.fans_for_sensor(&sensor_name) {
+                for fan in state.mapping.read().await.fans_for_sensor(&sensor_name) {
                     let controller_id = u8::try_from(fan.controller_id).map_err(|_| {
                         anyhow::anyhow!("Controller ID {} too large for u8", fan.controller_id)
                     })?;
@@ -167,7 +167,10 @@ mod tests {
     };
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU32, Ordering};
-    use tokio::time::{sleep, timeout};
+    use tokio::{
+        sync::RwLock,
+        time::{sleep, timeout},
+    };
 
     // Mock sensor implementation for testing
     #[derive(Debug)]
@@ -335,9 +338,12 @@ mod tests {
             config_manager: Arc::new(config_manager),
             controllers: Arc::new(tokio::sync::RwLock::new(controllers)),
             sensors: Arc::new(tokio::sync::RwLock::new(sensors)),
-            mapping: Arc::new(crate::mappings::Mapping::load_mappings(&[])),
-            color_mappings: Arc::new(crate::mappings::ColorMapping::build_color_mapping(&[])),
+            mapping: Arc::new(RwLock::new(crate::mappings::Mapping::load_mappings(&[]))),
             sensor_data: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            #[allow(dead_code)]
+            color_mappings: Arc::new(RwLock::new(
+                crate::mappings::ColorMapping::build_color_mapping(&[]),
+            )),
         });
 
         let event_bus = EventBus::new();

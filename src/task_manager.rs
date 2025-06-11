@@ -12,24 +12,6 @@ use tokio_util::sync::CancellationToken;
 ///
 /// Provides centralized management of background tasks with graceful shutdown
 /// capabilities and error propagation.
-///
-/// # Example
-///
-/// ```no_run
-/// use tt_riingd::task_manager::TaskManager;
-///
-/// let mut manager = TaskManager::new();
-///
-/// // In async context:
-/// // Spawn a task using spawn_task method
-/// // manager.spawn_task("worker".to_string(), |_token| async {
-/// //     // Background work
-/// //     Ok(())
-/// // }).await?;
-///
-/// // Later, shutdown all tasks
-/// // manager.shutdown_all().await?;
-/// ```
 pub struct TaskManager {
     tasks: HashMap<String, TaskInfo>,
     pub global_token: CancellationToken,
@@ -82,19 +64,6 @@ impl TaskManager {
         Ok(())
     }
 
-    /// Registers an existing task handle.
-    #[allow(dead_code)]
-    pub fn register_task(&mut self, name: String, handle: JoinHandle<Result<()>>) {
-        let task_token = self.global_token.child_token();
-        self.tasks.insert(
-            name,
-            TaskInfo {
-                handle,
-                cancel_token: task_token,
-            },
-        );
-    }
-
     /// Shuts down all registered tasks gracefully.
     ///
     /// Waits for all tasks to complete and collects any errors.
@@ -143,44 +112,18 @@ impl TaskManager {
         }
     }
 
-    /// Stops a specific task by name.
-    #[allow(dead_code)]
-    pub async fn stop_task(&mut self, name: &str) -> Result<()> {
-        if let Some(task_info) = self.tasks.remove(name) {
-            task_info.cancel_token.cancel();
-
-            match tokio::time::timeout(Duration::from_secs(5), task_info.handle).await {
-                Ok(Ok(Ok(()))) => {
-                    info!("Task '{}' stopped gracefully", name);
-                }
-                Ok(Ok(Err(e))) => {
-                    warn!("Task '{}' stopped with error: {}", name, e);
-                }
-                Ok(Err(e)) => {
-                    warn!("Task '{}' panicked: {}", name, e);
-                }
-                Err(_) => {
-                    warn!("Task '{}' timeout during shutdown", name);
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Returns the number of active tasks.
-    #[allow(dead_code)]
+    /// Returns the count of active tasks.
+    ///
+    /// Used only for testing purposes.
+    #[cfg(test)]
     pub fn active_count(&self) -> usize {
         self.tasks.len()
     }
 
-    /// Returns the names of all active tasks.
-    #[allow(dead_code)]
-    pub fn active_tasks(&self) -> Vec<&String> {
-        self.tasks.keys().collect()
-    }
-
-    /// Checks if a task with the given name is running.
-    #[allow(dead_code)]
+    /// Checks if a task with the given name is currently running.
+    ///
+    /// Used only for testing purposes.
+    #[cfg(test)]
     pub fn is_running(&self, name: &str) -> bool {
         self.tasks.contains_key(name)
     }
@@ -194,6 +137,6 @@ impl Default for TaskManager {
 
 struct TaskInfo {
     handle: JoinHandle<Result<()>>,
-    #[allow(dead_code)] // Used for future task cancellation functionality
+    #[allow(dead_code)] // May be used for future task cancellation functionality
     cancel_token: CancellationToken,
 }

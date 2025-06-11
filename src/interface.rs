@@ -67,12 +67,17 @@ impl DBusInterface {
     }
 
     /// Analyzes and applies configuration changes.
-    /// 
+    ///
     /// This method analyzes the current configuration file for changes
     /// and applies them if they are hot-reloadable, or provides feedback
     /// if a restart is required.
     async fn reload_config(&self) -> zbus::fdo::Result<String> {
-        match self.app_state.config_manager().analyze_config_changes().await {
+        match self
+            .app_state
+            .config_manager()
+            .analyze_config_changes()
+            .await
+        {
             Ok(change_type) => {
                 let result = match &change_type {
                     ConfigChangeType::HotReload => {
@@ -85,14 +90,21 @@ impl DBusInterface {
                         )
                     }
                 };
-                
-                if let Err(e) = self.event_bus.publish(Event::ConfigChangeDetected(change_type)) {
-                    return Err(zbus::fdo::Error::Failed(format!("Failed to publish config change event: {e}")));
+
+                if let Err(e) = self
+                    .event_bus
+                    .publish(Event::ConfigChangeDetected(change_type))
+                {
+                    return Err(zbus::fdo::Error::Failed(format!(
+                        "Failed to publish config change event: {e}"
+                    )));
                 }
-                
+
                 Ok(result)
             }
-            Err(e) => Err(zbus::fdo::Error::Failed(format!("Failed to analyze configuration changes: {e}")))
+            Err(e) => Err(zbus::fdo::Error::Failed(format!(
+                "Failed to analyze configuration changes: {e}"
+            ))),
         }
     }
 

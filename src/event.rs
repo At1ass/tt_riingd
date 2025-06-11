@@ -63,8 +63,12 @@ impl EventBus {
         Self { sender }
     }
 
-    /// Creates a new EventBus with specified capacity.
-    #[allow(dead_code)]
+    /// Creates a new EventBus with custom capacity.
+    ///
+    /// # Arguments
+    ///
+    /// * `capacity` - Channel capacity for buffering events
+    #[cfg(test)]
     pub fn with_capacity(capacity: usize) -> Self {
         let (sender, _) = broadcast::channel(capacity);
         Self { sender }
@@ -247,7 +251,9 @@ mod tests {
         let mut receiver = event_bus.subscribe();
 
         // Publish multiple events in sequence
-        event_bus.publish(Event::ConfigChangeDetected(ConfigChangeType::HotReload)).unwrap();
+        event_bus
+            .publish(Event::ConfigChangeDetected(ConfigChangeType::HotReload))
+            .unwrap();
         event_bus.publish(Event::ColorChanged).unwrap();
         event_bus.publish(Event::SystemShutdown).unwrap();
 
@@ -258,7 +264,11 @@ mod tests {
 
         // Verify order
         match (event1, event2, event3) {
-            (Event::ConfigChangeDetected(ConfigChangeType::HotReload), Event::ColorChanged, Event::SystemShutdown) => {}
+            (
+                Event::ConfigChangeDetected(ConfigChangeType::HotReload),
+                Event::ColorChanged,
+                Event::SystemShutdown,
+            ) => {}
             _ => panic!("Events should be received in publication order"),
         }
     }

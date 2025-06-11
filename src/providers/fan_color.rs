@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use log::info;
 use std::sync::Arc;
@@ -132,31 +132,46 @@ async fn update_fan_colors_by_temperature(
     state: &Arc<AppState>,
     event_bus: &EventBus,
 ) -> Result<()> {
-    let config = state.config().await;
-    let _sensor_data = state.sensor_data.read().await;
+    let color_mappings = state.color_mappings.read().await;
+    let colors = state.config().await.colors.clone();
 
-    for color_mapping in &config.color_mappings {
-        let color_name = &color_mapping.color;
-        if let Some(color_cfg) = config.colors.iter().find(|c| c.color == *color_name) {
-            for fan_target in &color_mapping.targets {
+    for (color, fan_refs_map) in color_mappings.color_to_fans_iter() {
+        if fan_refs_map.is_empty() {
+            log::warn!("Color mapping '{}' has no targets", color);
+            continue;
+        }
+
+        info!(
+            "Applying color '{}' to {} fan targets",
+            color,
+            fan_refs_map.len()
+        );
+
+        if let Some(color_cfg) = colors.iter().find(|c| c.color == color) {
+            for fan_ref in fan_refs_map {
                 if let Err(e) = state
                     .controllers
                     .read()
                     .await
                     .update_channel_color(
-                        fan_target.controller,
-                        fan_target.fan_idx,
+                        u8::try_from(fan_ref.controller_id).context("Invalid controller ID")?,
+                        u8::try_from(fan_ref.channel).context("Invalid channel ID")?,
                         color_cfg.rgb[0],
                         color_cfg.rgb[1],
                         color_cfg.rgb[2],
                     )
                     .await
                 {
-                    log::error!("Failed to set color: {e}");
+                    log::error!(
+                        "Failed to set color '{}' on controller {} fan {}: {e}",
+                        color,
+                        fan_ref.controller_id,
+                        fan_ref.channel,
+                    );
                 }
             }
         } else {
-            log::warn!("Color {color_name} not found in config");
+            log::warn!("Color '{}' not found in configuration", color);
         }
     }
 
@@ -527,7 +542,7 @@ mod tests {
         // Send some events that might cause issues
         let _ = event_bus.publish(Event::SystemShutdown); // May fail if no subscribers
         let _ = event_bus.publish(Event::ConfigChangeDetected(
-            crate::event::ConfigChangeType::HotReload
+            crate::event::ConfigChangeType::HotReload,
         )); // May fail if no subscribers
 
         // Service should continue running despite irrelevant events

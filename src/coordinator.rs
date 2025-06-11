@@ -246,15 +246,18 @@ impl SystemCoordinator {
                 self.handle_hot_reload().await
             }
             ConfigChangeType::ColdRestart { changed_sections } => {
-                log::warn!("Hardware configuration changes detected in sections: {:?}", changed_sections);
+                log::warn!(
+                    "Hardware configuration changes detected in sections: {:?}",
+                    changed_sections
+                );
                 log::warn!("These changes require daemon restart to take effect");
                 log::warn!("Please restart the tt_riingd daemon to apply hardware changes");
-                
+
                 // Log user-friendly instructions
                 log::info!("To restart the daemon, run:");
                 log::info!("  sudo systemctl restart tt_riingd");
                 log::info!("or stop and start the daemon manually");
-                
+
                 Ok(())
             }
         }
@@ -271,10 +274,16 @@ impl SystemCoordinator {
                 .reload()
                 .await
                 .context("Failed to reload configuration")?;
-            
+
             // Update mappings and other hot-reloadable components
-            let _new_config = state.config_manager().clone_config().await;
-            
+            // TODO: Implement actual hot-reload of mappings, curves, and color configurations
+            let new_config = state.config_manager().get().await;
+
+            state
+                .update_mappings(&new_config)
+                .await
+                .context("Failed to update mappings")?;
+
             // Note: Controllers and sensors are NOT reinitialized for hot reload
             // Only mappings, curves, and colors are updated
             log::info!("Updated configuration for curves, mappings, and colors");
@@ -286,8 +295,6 @@ impl SystemCoordinator {
         Ok(())
     }
 
-
-
     /// Performs graceful shutdown of all components.
     async fn shutdown(&mut self) -> Result<()> {
         info!("Initiating graceful shutdown...");
@@ -298,16 +305,5 @@ impl SystemCoordinator {
 
         info!("Shutdown complete");
         Ok(())
-    }
-
-    /// Returns a reference to the EventBus for testing purposes.
-    #[allow(dead_code)]
-    pub const fn event_bus(&self) -> &EventBus {
-        &self.event_bus
-    }
-
-    #[allow(dead_code)]
-    pub fn running_services(&self) -> Vec<&'static str> {
-        self.service_providers.iter().map(|p| p.name()).collect()
     }
 }

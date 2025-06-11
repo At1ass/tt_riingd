@@ -29,10 +29,10 @@ pub struct AppState {
     /// Temperature sensors for monitoring
     pub sensors: Arc<RwLock<Vec<Box<dyn TemperatureSensor>>>>,
     /// Sensor-to-fan mappings
-    pub mapping: Arc<Mapping>,
+    pub mapping: Arc<RwLock<Mapping>>,
     /// Color-to-fan mappings
-    #[allow(dead_code)] // Used in future RGB color control features
-    pub color_mappings: Arc<ColorMapping>,
+    #[allow(dead_code)] // Will be used for future RGB color control features
+    pub color_mappings: Arc<RwLock<ColorMapping>>,
     /// Runtime sensor data cache
     pub sensor_data: Arc<RwLock<HashMap<String, f32>>>,
 }
@@ -90,8 +90,10 @@ impl AppState {
                     Vec::new()
                 }
             })),
-            mapping: Arc::new(Mapping::load_mappings(&config.mappings)),
-            color_mappings: Arc::new(ColorMapping::build_color_mapping(&config.color_mappings)),
+            mapping: Arc::new(RwLock::new(Mapping::load_mappings(&config.mappings))),
+            color_mappings: Arc::new(RwLock::new(ColorMapping::build_color_mapping(
+                &config.color_mappings,
+            ))),
             sensor_data: Arc::new(RwLock::new(HashMap::new())),
             config_manager: Arc::new(config_manager),
         })
@@ -107,5 +109,16 @@ impl AppState {
         &self.config_manager
     }
 
+    pub async fn update_mappings(&self, config: &Config) -> anyhow::Result<()> {
+        let new_mapping = Mapping::load_mappings(&config.mappings);
+        let new_clr_mappings = ColorMapping::build_color_mapping(&config.color_mappings);
 
+        let mut mapping = self.mapping.write().await;
+        *mapping = new_mapping;
+
+        let mut color_mappings = self.color_mappings.write().await;
+        *color_mappings = new_clr_mappings;
+
+        Ok(())
+    }
 }

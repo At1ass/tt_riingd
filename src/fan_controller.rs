@@ -81,8 +81,6 @@ mod tests {
     // Mock controller that succeeds all operations
     #[derive(Debug)]
     struct MockSuccessfulController {
-        #[allow(dead_code)]
-        controller_id: u8,
         active_curves: Arc<Mutex<HashMap<u8, String>>>,
         last_temperatures: Arc<Mutex<HashMap<u8, f32>>>,
         channel_colors: Arc<Mutex<ChannelColorMap>>,
@@ -91,9 +89,8 @@ mod tests {
     }
 
     impl MockSuccessfulController {
-        fn new(controller_id: u8) -> Self {
+        fn new(_controller_id: u8) -> Self {
             Self {
-                controller_id,
                 active_curves: Arc::new(Mutex::new(HashMap::new())),
                 last_temperatures: Arc::new(Mutex::new(HashMap::new())),
                 channel_colors: Arc::new(Mutex::new(HashMap::new())),
@@ -116,11 +113,6 @@ mod tests {
 
         fn get_channel_color(&self, channel: u8) -> Option<(u8, u8, u8)> {
             self.channel_colors.lock().unwrap().get(&channel).copied()
-        }
-
-        #[allow(dead_code)]
-        fn get_active_curve_sync(&self, channel: u8) -> Option<String> {
-            self.active_curves.lock().unwrap().get(&channel).cloned()
         }
     }
 

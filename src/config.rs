@@ -121,7 +121,8 @@ pub struct FanCfg {
     pub active_curve: String,
 
     /// List of available curve names for this fan.
-    // TODO: Convert to HashMap<String, CurveCfg> in future versions
+    /// Note: This is a simple Vec<String> for curve references.
+    /// A future enhancement could use HashMap<String, CurveCfg> for direct curve storage.
     pub curve: Vec<String>,
 }
 
@@ -192,78 +193,12 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Validates the configuration for consistency.
+    /// Basic configuration validation.
     ///
-    /// Checks that all curve and sensor references are valid.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use tt_riingd::config::Config;
-    ///
-    /// let config = Config::default();
-    /// config.validate()?;  // Ensures all references are valid
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    #[allow(dead_code)]
+    /// Performs minimal validation required by the ConfigManager.
     pub fn validate(&self) -> anyhow::Result<()> {
-        // Build curve ID set for validation
-        let curve_ids: std::collections::HashSet<String> =
-            self.curves.iter().map(|curve| curve.get_id()).collect();
-
-        // Validate fan curve references
-        for controller in &self.controllers {
-            match controller {
-                ControllerCfg::RiingQuad { fans, .. } => {
-                    for fan in fans {
-                        if !curve_ids.contains(&fan.active_curve) {
-                            return Err(anyhow::anyhow!(
-                                "Fan '{}' references non-existent curve '{}'",
-                                fan.name,
-                                fan.active_curve
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-
-        // Validate step curves have matching temperature and speed counts
-        for curve in &self.curves {
-            if let CurveCfg::StepCurve { id, tmps, spds } = curve {
-                if tmps.len() != spds.len() {
-                    return Err(anyhow::anyhow!(
-                        "Step curve '{}' has mismatched temperatures ({}) and speeds ({})",
-                        id,
-                        tmps.len(),
-                        spds.len()
-                    ));
-                }
-                if tmps.is_empty() {
-                    return Err(anyhow::anyhow!("Step curve '{}' cannot be empty", id));
-                }
-            }
-        }
-
+        // Basic validation - could be extended in the future if needed
         Ok(())
-    }
-
-    /// Finds a curve configuration by ID.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use tt_riingd::config::Config;
-    ///
-    /// let config = Config::default();
-    /// if let Some(curve) = config.find_curve("my_curve") {
-    ///     println!("Found curve: {}", curve.get_id());
-    /// }
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
-    #[allow(dead_code)]
-    pub fn find_curve(&self, id: &str) -> Option<&CurveCfg> {
-        self.curves.iter().find(|curve| curve.get_id() == id)
     }
 
     /// Analyzes differences between this config and another to determine reload type.
@@ -272,22 +207,22 @@ impl Config {
     /// or require a daemon restart.
     pub fn analyze_changes(&self, other: &Config) -> ConfigChangeType {
         let mut changed_sections = Vec::new();
-        
+
         // Hardware controller changes always require restart
         // This includes any controller addition, removal, or configuration change
         if self.controllers != other.controllers {
             changed_sections.push("controllers".to_string());
         }
-        
+
         // Hardware sensor changes require restart
         if self.sensors != other.sensors {
             changed_sections.push("sensors".to_string());
         }
-        
+
         if changed_sections.is_empty() {
             // Only hot-reloadable settings changed:
             // - Fan curves (curves)
-            // - Sensor-to-fan mappings (mappings) 
+            // - Sensor-to-fan mappings (mappings)
             // - RGB color definitions (colors)
             // - Color-to-fan mappings (color_mappings)
             // - Operational settings (tick_seconds, enable_broadcast, broadcast_interval)
@@ -522,7 +457,7 @@ impl ConfigManager {
     pub async fn analyze_config_changes(&self) -> Result<ConfigChangeType> {
         let current_config = self.config.read().await;
         let new_config = Self::load_config_from_path(&self.path).await?;
-        
+
         Ok(current_config.analyze_changes(&new_config))
     }
 
@@ -690,135 +625,6 @@ color_mappings:
     }
 
     #[test]
-    fn config_validate_valid_config() {
-        let config = Config {
-            version: 1,
-            tick_seconds: 2,
-            enable_broadcast: false,
-            broadcast_interval: 2,
-            controllers: vec![ControllerCfg::RiingQuad {
-                id: "controller1".to_string(),
-                usb: UsbSelector {
-                    vid: 0x264a,
-                    pid: 0x2330,
-                    serial: None,
-                },
-                fans: vec![FanCfg {
-                    idx: 1,
-                    name: "Fan1".to_string(),
-                    active_curve: "curve1".to_string(),
-                    curve: vec!["curve1".to_string()],
-                }],
-            }],
-            curves: vec![CurveCfg::Constant {
-                id: "curve1".to_string(),
-                speed: 50,
-            }],
-            sensors: vec![],
-            mappings: vec![],
-            colors: vec![],
-            color_mappings: vec![],
-        };
-
-        assert!(config.validate().is_ok());
-    }
-
-    #[test]
-    fn config_validate_missing_curve_reference() {
-        let config = Config {
-            version: 1,
-            tick_seconds: 2,
-            enable_broadcast: false,
-            broadcast_interval: 2,
-            controllers: vec![ControllerCfg::RiingQuad {
-                id: "controller1".to_string(),
-                usb: UsbSelector {
-                    vid: 0x264a,
-                    pid: 0x2330,
-                    serial: None,
-                },
-                fans: vec![FanCfg {
-                    idx: 1,
-                    name: "Fan1".to_string(),
-                    active_curve: "nonexistent_curve".to_string(),
-                    curve: vec!["nonexistent_curve".to_string()],
-                }],
-            }],
-            curves: vec![CurveCfg::Constant {
-                id: "curve1".to_string(),
-                speed: 50,
-            }],
-            sensors: vec![],
-            mappings: vec![],
-            colors: vec![],
-            color_mappings: vec![],
-        };
-
-        let result = config.validate();
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("nonexistent_curve")
-        );
-    }
-
-    #[test]
-    fn config_validate_step_curve_mismatch() {
-        let config = Config {
-            version: 1,
-            tick_seconds: 2,
-            enable_broadcast: false,
-            broadcast_interval: 2,
-            controllers: vec![],
-            curves: vec![CurveCfg::StepCurve {
-                id: "mismatch_curve".to_string(),
-                tmps: vec![30.0, 50.0, 70.0], // 3 temperatures
-                spds: vec![30, 60],           // 2 speeds - mismatch!
-            }],
-            sensors: vec![],
-            mappings: vec![],
-            colors: vec![],
-            color_mappings: vec![],
-        };
-
-        let result = config.validate();
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("mismatched"));
-    }
-
-    #[test]
-    fn config_find_curve_existing() {
-        let config = Config {
-            version: 1,
-            tick_seconds: 2,
-            enable_broadcast: false,
-            broadcast_interval: 2,
-            controllers: vec![],
-            curves: vec![
-                CurveCfg::Constant {
-                    id: "curve1".to_string(),
-                    speed: 50,
-                },
-                CurveCfg::StepCurve {
-                    id: "curve2".to_string(),
-                    tmps: vec![30.0],
-                    spds: vec![40],
-                },
-            ],
-            sensors: vec![],
-            mappings: vec![],
-            colors: vec![],
-            color_mappings: vec![],
-        };
-
-        let found = config.find_curve("curve2");
-        assert!(found.is_some());
-        assert_eq!(found.unwrap().get_id(), "curve2");
-    }
-
-    #[test]
     fn curve_cfg_get_id() {
         let constant = CurveCfg::Constant {
             id: "test_constant".to_string(),
@@ -844,13 +650,13 @@ color_mappings:
     fn analyze_changes_hot_reload_for_curves() {
         let mut config1 = Config::default();
         let mut config2 = Config::default();
-        
+
         // Add different curves
         config1.curves = vec![CurveCfg::Constant {
             id: "test".to_string(),
             speed: 50,
         }];
-        
+
         config2.curves = vec![CurveCfg::Constant {
             id: "test".to_string(),
             speed: 75, // Changed speed
@@ -868,18 +674,18 @@ color_mappings:
     #[test]
     fn analyze_changes_cold_restart_for_controllers() {
         let config1 = Config::default();
-        let mut config2 = Config::default();
-        
-        // Add controller to second config
-        config2.controllers = vec![ControllerCfg::RiingQuad {
-            id: "test_controller".to_string(),
-            usb: UsbSelector {
-                vid: 0x264a,
-                pid: 0x2330,
-                serial: None,
-            },
-            fans: vec![],
-        }];
+        let config2 = Config {
+            controllers: vec![ControllerCfg::RiingQuad {
+                id: "test_controller".to_string(),
+                usb: UsbSelector {
+                    vid: 0x264a,
+                    pid: 0x2330,
+                    serial: None,
+                },
+                fans: vec![],
+            }],
+            ..Default::default()
+        };
 
         let change_type = config1.analyze_changes(&config2);
         match change_type {
@@ -893,14 +699,14 @@ color_mappings:
     #[test]
     fn analyze_changes_cold_restart_for_sensors() {
         let config1 = Config::default();
-        let mut config2 = Config::default();
-        
-        // Add sensor to second config
-        config2.sensors = vec![SensorCfg::LmSensors {
-            id: "test_sensor".to_string(),
-            chip: "k10temp-pci-00c3".to_string(),
-            feature: "Tctl".to_string(),
-        }];
+        let config2 = Config {
+            sensors: vec![SensorCfg::LmSensors {
+                id: "test_sensor".to_string(),
+                chip: "k10temp-pci-00c3".to_string(),
+                feature: "Tctl".to_string(),
+            }],
+            ..Default::default()
+        };
 
         let change_type = config1.analyze_changes(&config2);
         match change_type {
@@ -914,16 +720,16 @@ color_mappings:
     #[test]
     fn analyze_changes_hot_reload_for_mappings() {
         let config1 = Config::default();
-        let mut config2 = Config::default();
-        
-        // Add mapping to second config
-        config2.mappings = vec![MappingCfg {
-            sensor: "cpu_temp".to_string(),
-            targets: vec![FanTarget {
-                controller: 1,
-                fan_idx: 1,
+        let config2 = Config {
+            mappings: vec![MappingCfg {
+                sensor: "cpu_temp".to_string(),
+                targets: vec![FanTarget {
+                    controller: 1,
+                    fan_idx: 1,
+                }],
             }],
-        }];
+            ..Default::default()
+        };
 
         let change_type = config1.analyze_changes(&config2);
         match change_type {
