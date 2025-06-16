@@ -4,9 +4,9 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use log::{error, info, warn};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use tracing::{error, info, warn};
 
 /// Manages async tasks with proper lifecycle and error handling.
 ///

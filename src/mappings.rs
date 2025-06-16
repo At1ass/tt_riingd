@@ -4,10 +4,8 @@
 //! and color configurations based on temperature readings.
 
 use dashmap::{DashMap, DashSet};
-use log::warn;
-use std::collections::HashMap;
 
-use crate::config::{ColorMappingCfg, MappingCfg};
+use crate::config::{ColorMappingCfg, CurveMappingCfg, MappingCfg};
 
 /// Type alias for sensor identifier keys.
 pub type SensorKey = String;
@@ -39,6 +37,36 @@ pub struct Mapping {
 
     /// Maps sensors to the set of fans they control.
     sensor2fans: DashMap<SensorKey, DashSet<FanRef>>,
+}
+
+#[derive(Default, Debug)]
+pub struct CurveMapping {
+    /// Maps color names to the set of fans that display them.
+    fan2curve: DashMap<FanRef, String>,
+}
+
+impl CurveMapping {
+    pub fn load_mappings(curve_mapping_cfg: &[CurveMappingCfg]) -> Self {
+        curve_mapping_cfg
+            .iter()
+            .flat_map(|c| {
+                let ckey = c.curve.clone();
+                c.targets.iter().map(move |t| (ckey.clone(), t))
+            })
+            .fold(Self::default(), |acc, (curve, target)| {
+                let fan = FanRef {
+                    controller_id: target.controller as usize,
+                    channel: target.fan_idx as usize,
+                };
+
+                acc.fan2curve.insert(fan, curve.clone());
+                acc
+            })
+    }
+
+    pub fn get_curve_for_fan(&self, fan: &FanRef) -> Option<String> {
+        self.fan2curve.get(fan).map(|r| r.value().clone())
+    }
 }
 
 /// Color mapping between temperature and RGB lighting.
@@ -121,41 +149,6 @@ impl Mapping {
             })
     }
 
-    /// Attaches a fan to a sensor dynamically.
-    ///
-    /// Updates the mapping to associate a fan with a specific sensor,
-    /// removing any previous association for that fan.
-    ///
-    /// # Arguments
-    ///
-    /// * `fan` - Fan reference to attach
-    /// * `sensor` - Sensor key to associate with the fan
-    #[allow(dead_code)]
-    pub fn attach(&self, fan: FanRef, sensor: SensorKey) {
-        if let Some(old) = self.fans2sensor.insert(fan, sensor.clone()) {
-            if let Some(set) = self.sensor2fans.get(&old) {
-                set.remove(&fan);
-            }
-        }
-        self.sensor2fans.entry(sensor).or_default().insert(fan);
-    }
-
-    /// Detaches a fan from its current sensor.
-    ///
-    /// Removes the mapping relationship for the specified fan.
-    ///
-    /// # Arguments
-    ///
-    /// * `fan` - Fan reference to detach
-    #[allow(dead_code)]
-    pub fn detach(&self, fan: FanRef) {
-        if let Some((_, key)) = self.fans2sensor.remove(&fan) {
-            if let Some(set) = self.sensor2fans.get(&key) {
-                set.remove(&fan);
-            }
-        }
-    }
-
     /// Gets all fans controlled by a specific sensor.
     ///
     /// Returns an iterator over fan references that are controlled by
@@ -179,82 +172,6 @@ impl Mapping {
     }
 }
 
-/// Temperature-based color mapping logic.
-///
-/// Maps temperature values to RGB colors based on minimum and maximum
-/// temperature thresholds and their corresponding color values.
-///
-/// # Example
-///
-/// ```
-/// use tt_riingd::mappings::color_for_temp;
-///
-/// // Map temperature to color: 30°C (blue) to 80°C (red)
-/// let color = color_for_temp(55.0, 30.0, 80.0, [0, 0, 255], [255, 0, 0]);
-/// // Returns interpolated color between blue and red
-/// ```
-#[allow(dead_code)]
-pub fn color_for_temp(
-    temp: f32,
-    min_temp: f32,
-    max_temp: f32,
-    min_color: [u8; 3],
-    max_color: [u8; 3],
-) -> [u8; 3] {
-    if temp <= min_temp {
-        return min_color;
-    }
-    if temp >= max_temp {
-        return max_color;
-    }
-
-    let ratio = (temp - min_temp) / (max_temp - min_temp);
-    [
-        (min_color[0] as f32 + ratio * (max_color[0] as f32 - min_color[0] as f32)) as u8,
-        (min_color[1] as f32 + ratio * (max_color[1] as f32 - min_color[1] as f32)) as u8,
-        (min_color[2] as f32 + ratio * (max_color[2] as f32 - min_color[2] as f32)) as u8,
-    ]
-}
-
-/// Resolves sensor mappings to target channels.
-///
-/// Takes sensor readings and mapping configuration to determine which
-/// fan channels should be controlled based on sensor values.
-///
-/// # Example
-///
-/// ```no_run
-/// use tt_riingd::mappings::resolve_mappings;
-/// use tt_riingd::config::MappingCfg;
-/// use std::collections::HashMap;
-///
-/// let mut temps = HashMap::new();
-/// temps.insert("cpu_temp".to_string(), 65.0);
-///
-/// let mappings = vec![]; // Your mapping configuration
-/// let resolved = resolve_mappings(&temps, &mappings);
-/// ```
-#[allow(dead_code)]
-pub fn resolve_mappings(
-    temperatures: &HashMap<String, f32>,
-    mappings: &[MappingCfg],
-) -> HashMap<(u8, u8), f32> {
-    let mut result = HashMap::new();
-
-    for mapping in mappings {
-        if let Some(&temp) = temperatures.get(&mapping.sensor) {
-            for target in &mapping.targets {
-                let key = (target.controller, target.fan_idx);
-                result.insert(key, temp);
-            }
-        } else {
-            warn!("Temperature sensor '{}' not found", mapping.sensor);
-        }
-    }
-
-    result
-}
-
 /// Resolves color mappings based on temperature readings.
 ///
 /// Maps temperature sensors to color values for RGB lighting control.
@@ -275,10 +192,51 @@ pub fn resolve_mappings(
 /// ```
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::config::{FanTarget, MappingCfg};
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
+
+    /// Temperature-based color mapping logic for testing.
+    fn color_for_temp(
+        temp: f32,
+        min_temp: f32,
+        max_temp: f32,
+        min_color: [u8; 3],
+        max_color: [u8; 3],
+    ) -> [u8; 3] {
+        if temp <= min_temp {
+            return min_color;
+        }
+        if temp >= max_temp {
+            return max_color;
+        }
+
+        let ratio = (temp - min_temp) / (max_temp - min_temp);
+        [
+            (min_color[0] as f32 + ratio * (max_color[0] as f32 - min_color[0] as f32)) as u8,
+            (min_color[1] as f32 + ratio * (max_color[1] as f32 - min_color[1] as f32)) as u8,
+            (min_color[2] as f32 + ratio * (max_color[2] as f32 - min_color[2] as f32)) as u8,
+        ]
+    }
+
+    /// Resolves sensor mappings to target channels for testing.
+    fn resolve_mappings(
+        temperatures: &HashMap<String, f32>,
+        mappings: &[MappingCfg],
+    ) -> HashMap<(u8, u8), f32> {
+        let mut result = HashMap::new();
+
+        for mapping in mappings {
+            if let Some(&temp) = temperatures.get(&mapping.sensor) {
+                for target in &mapping.targets {
+                    let key = (target.controller, target.fan_idx);
+                    result.insert(key, temp);
+                }
+            }
+        }
+
+        result
+    }
 
     #[test]
     fn color_for_temp_below_min() {

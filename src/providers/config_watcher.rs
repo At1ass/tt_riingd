@@ -1,11 +1,11 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use log::{debug, error, info, warn};
 use notify::{Event, EventHandler, RecursiveMode, Watcher, recommended_watcher};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info, warn};
 
 use crate::{
     app_context::AppState,

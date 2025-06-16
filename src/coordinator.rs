@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use log::info;
+use tracing::{error, info, warn};
 
 use crate::{
     app_context::AppState,
@@ -116,7 +116,7 @@ impl SystemCoordinator {
                 providers.push(Box::new(provider));
             }
             Err(e) => {
-                log::warn!(
+                warn!(
                     "Failed to create D-Bus service provider: {}, skipping D-Bus service",
                     e
                 );
@@ -162,7 +162,7 @@ impl SystemCoordinator {
                     });
                 }
                 Err(e) => {
-                    log::warn!(
+                    warn!(
                         "Non-critical service '{}' failed to start: {}",
                         provider.name(),
                         e
@@ -232,7 +232,7 @@ impl SystemCoordinator {
                 bail!("Event bus channel closed unexpectedly");
             }
             Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                log::warn!("Event bus lagged by {n} messages");
+                warn!("Event bus lagged by {n} messages");
             }
         }
         Ok(())
@@ -246,17 +246,17 @@ impl SystemCoordinator {
                 self.handle_hot_reload().await
             }
             ConfigChangeType::ColdRestart { changed_sections } => {
-                log::warn!(
+                warn!(
                     "Hardware configuration changes detected in sections: {:?}",
                     changed_sections
                 );
-                log::warn!("These changes require daemon restart to take effect");
-                log::warn!("Please restart the tt_riingd daemon to apply hardware changes");
+                warn!("These changes require daemon restart to take effect");
+                warn!("Please restart the tt_riingd daemon to apply hardware changes");
 
                 // Log user-friendly instructions
-                log::info!("To restart the daemon, run:");
-                log::info!("  sudo systemctl restart tt_riingd");
-                log::info!("or stop and start the daemon manually");
+                info!("To restart the daemon, run:");
+                info!("  sudo systemctl restart tt_riingd");
+                info!("or stop and start the daemon manually");
 
                 Ok(())
             }
@@ -275,8 +275,7 @@ impl SystemCoordinator {
                 .await
                 .context("Failed to reload configuration")?;
 
-            // Update mappings and other hot-reloadable components
-            // TODO: Implement actual hot-reload of mappings, curves, and color configurations
+            // Update mappings, curves and other hot-reloadable components
             let new_config = state.config_manager().get().await;
 
             state
@@ -286,10 +285,10 @@ impl SystemCoordinator {
 
             // Note: Controllers and sensors are NOT reinitialized for hot reload
             // Only mappings, curves, and colors are updated
-            log::info!("Updated configuration for curves, mappings, and colors");
-            log::info!("Hot configuration reload completed successfully");
+            info!("Updated configuration for curves, mappings, and colors");
+            info!("Hot configuration reload completed successfully");
         } else {
-            log::warn!("Cannot reload config: system state not initialized");
+            warn!("Cannot reload config: system state not initialized");
         }
 
         Ok(())
@@ -300,7 +299,7 @@ impl SystemCoordinator {
         info!("Initiating graceful shutdown...");
 
         if let Err(e) = self.task_manager.shutdown_all().await {
-            log::error!("Error during task shutdown: {}", e);
+            error!("Error during task shutdown: {}", e);
         }
 
         info!("Shutdown complete");

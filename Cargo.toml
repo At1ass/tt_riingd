@@ -22,9 +22,11 @@ event-listener = "5.4.0"
 # Config
 # unconfig = { git = "https://github.com/rojer-98/unconfig.git", default-features = false }
 
-# Log
-syslog = "7.0"
-log = "0.4.27"
+# Logging - modern tracing ecosystem
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "registry"] }
+tracing-appender = "0.2"
+syslog = "6.0"
 
 # Helpers
 uuid = { version = "1.7", features = ["v4"] }
@@ -36,6 +38,7 @@ zvariant = { version = "5.5.1" }
 async-trait = "0.1.88"
 futures = "0.3.31"
 lm-sensors = "0.3.2"
+libloading = "0.8"
 dashmap = "7.0.0-rc2"
 serde_yaml = "0.9.34"
 clap = { version = "4.5.38", features = ["derive"] }

@@ -1,15 +1,16 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
-use log::info;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
+use tracing::{error, info};
 
 use crate::{
     app_context::AppState,
     event::{Event, EventBus},
+    mappings::FanRef,
     providers::traits::ServiceProvider,
     task_manager::TaskManager,
 };
@@ -102,12 +103,42 @@ async fn run_monitoring_service(
             }
             _instant = interval.tick() => {
                 if let Err(e) = collect_and_process_temperatures(&state, &event_bus).await {
-                    log::error!("Failed to collect temperatures: {e}");
+                    error!("Failed to collect temperatures: {e}");
                 }
             }
         }
     }
     Ok(())
+}
+
+async fn calculate_fan_speed(
+    controller_id: u8,
+    channel: u8,
+    temp: f32,
+    state: &Arc<AppState>,
+) -> Result<u8> {
+    let curve_registry: &Vec<_> = &state.config().await.curves;
+    let active_curves = state.active_curves.read().await;
+
+    let curve_name = active_curves
+        .get_curve_for_fan(&FanRef {
+            controller_id: controller_id as usize,
+            channel: channel as usize,
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "No active curve found for controller {} channel {}",
+                controller_id,
+                channel
+            )
+        })?;
+
+    let curve = curve_registry
+        .iter()
+        .find(|c| c.get_id() == curve_name)
+        .ok_or_else(|| anyhow::anyhow!("Curve {} not found", curve_name))?;
+
+    curve.calculate_speed(temp)
 }
 
 async fn collect_and_process_temperatures(
@@ -131,19 +162,23 @@ async fn collect_and_process_temperatures(
                     let channel = u8::try_from(fan.channel)
                         .map_err(|_| anyhow::anyhow!("Channel {} too large for u8", fan.channel))?;
 
+                    let speed = calculate_fan_speed(controller_id, channel, temp, state)
+                        .await
+                        .context("Failed to calculate fan speed")?;
+
                     if let Err(e) = state
                         .controllers
                         .read()
                         .await
-                        .update_channel(controller_id, channel, temp)
+                        .update_channel(controller_id, channel, temp, speed)
                         .await
                     {
-                        log::error!("Failed to update controller: {e}");
+                        error!("Failed to update controller: {e}");
                     }
                 }
             }
             Err(e) => {
-                log::error!("Failed to read temperature from sensor: {e}");
+                error!("Failed to read temperature from sensor: {e}");
             }
         }
     }
@@ -151,7 +186,7 @@ async fn collect_and_process_temperatures(
     *state.sensor_data.write().await = temperatures.clone();
 
     if let Err(e) = event_bus.publish(Event::TemperatureChanged(temperatures)) {
-        log::error!("Failed to publish temperature event: {e}");
+        error!("Failed to publish temperature event: {e}");
     }
 
     Ok(())
@@ -162,8 +197,9 @@ mod tests {
     use super::*;
     use crate::{
         config::{Config, FanTarget, MappingCfg, SensorCfg},
-        controller::Controllers,
-        sensors::TemperatureSensor,
+        drivers::controller_manager::ControllerManager,
+        mappings::{ColorMapping, CurveMapping, Mapping},
+        temperature_sensors::{sensor::TemperatureSensor, sensor_manager},
     };
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -219,6 +255,11 @@ mod tests {
         }
     }
 
+    // Helper function to create ConfigManager for tests
+    fn create_test_config_manager(config: Config) -> crate::config::ConfigManager {
+        crate::config::ConfigManager::new(config, std::path::PathBuf::from("/tmp/test.yml"))
+    }
+
     // Helper function to create mock AppState with minimal Controllers
     async fn create_mock_app_state() -> Arc<AppState> {
         let config = Config {
@@ -243,8 +284,7 @@ mod tests {
             ..Default::default()
         };
 
-        let config_manager =
-            crate::config::ConfigManager::new(config, std::path::PathBuf::from("/tmp/test.yml"));
+        let config_manager = create_test_config_manager(config);
         Arc::new(AppState::new(config_manager).await.unwrap())
     }
 
@@ -328,22 +368,20 @@ mod tests {
             Box::new(MockTemperatureSensor::new("gpu_temp", 62.3)),
         ];
 
-        let controllers =
-            Controllers::init_from_cfg(&config).unwrap_or_else(|_| Controllers::empty());
+        let controllers = ControllerManager::init_from_cfg(&config)
+            .unwrap_or_else(|_| ControllerManager::empty());
 
-        // Create AppState with our mock sensors
-        let config_manager =
-            crate::config::ConfigManager::new(config, std::path::PathBuf::from("/dev/null"));
-        let state = Arc::new(crate::app_context::AppState {
+        // Create AppState with our mock sensors wrapped in SensorManager
+        let sensor_manager = sensor_manager::SensorManager::new_from_sensors(sensors);
+        let config_manager = create_test_config_manager(config.clone());
+        let state = Arc::new(AppState {
             config_manager: Arc::new(config_manager),
             controllers: Arc::new(tokio::sync::RwLock::new(controllers)),
-            sensors: Arc::new(tokio::sync::RwLock::new(sensors)),
-            mapping: Arc::new(RwLock::new(crate::mappings::Mapping::load_mappings(&[]))),
+            sensors: Arc::new(tokio::sync::RwLock::new(sensor_manager)),
+            mapping: Arc::new(RwLock::new(Mapping::load_mappings(&[]))),
+            active_curves: Arc::new(RwLock::new(CurveMapping::load_mappings(&[]))),
             sensor_data: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-            #[allow(dead_code)]
-            color_mappings: Arc::new(RwLock::new(
-                crate::mappings::ColorMapping::build_color_mapping(&[]),
-            )),
+            color_mappings: Arc::new(RwLock::new(ColorMapping::build_color_mapping(&[]))),
         });
 
         let event_bus = EventBus::new();
@@ -379,11 +417,10 @@ mod tests {
             ..Default::default()
         };
 
-        let _controllers =
-            Controllers::init_from_cfg(&config).unwrap_or_else(|_| Controllers::empty());
+        let _controllers = ControllerManager::init_from_cfg(&config)
+            .unwrap_or_else(|_| ControllerManager::empty());
 
-        let config_manager =
-            crate::config::ConfigManager::new(config, std::path::PathBuf::from("/tmp/test.yml"));
+        let config_manager = create_test_config_manager(config);
         let state = Arc::new(AppState::new(config_manager).await.unwrap());
 
         let event_bus = EventBus::new();

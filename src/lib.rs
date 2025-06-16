@@ -40,15 +40,12 @@
 pub mod app_context;
 pub mod application;
 pub mod config;
-pub mod controller;
 pub mod coordinator;
 pub mod drivers;
 pub mod event;
-pub mod fan_controller;
 pub mod fan_curve;
 pub mod interface;
 pub mod mappings;
 pub mod providers;
-pub mod sensors;
 pub mod task_manager;
 pub mod temperature_sensors;

@@ -4,7 +4,6 @@
 //! through HID communication with Thermaltake devices.
 
 use std::{
-    collections::HashMap,
     slice::Iter as SliceIter,
     sync::{Arc, LazyLock},
 };
@@ -12,8 +11,9 @@ use std::{
 use anyhow::{Ok, Result, anyhow};
 use futures::stream::{Iter as FutureIter, StreamExt, iter};
 use hidapi::HidApi;
+use tracing::{info, warn};
 
-use crate::{config::Config, drivers, fan_controller::FanController, fan_curve::FanCurve};
+use crate::{config::Config, drivers, drivers::fan_controller::FanController};
 
 /// Thread-safe collection of fan controllers.
 ///
@@ -24,31 +24,31 @@ use crate::{config::Config, drivers, fan_controller::FanController, fan_curve::F
 /// # Example
 ///
 /// ```no_run
-/// use tt_riingd::controller::Controllers;
+/// use tt_riingd::drivers::controller_manager::ControllerManager;
 /// use tt_riingd::config::Config;
 ///
 /// # async fn example() -> anyhow::Result<()> {
 /// let config = Config::default();
-/// let controllers = Controllers::init_from_cfg(&config)?;
+/// let controllers = ControllerManager::init_from_cfg(&config)?;
 ///
 /// // Initialize all controllers
 /// controllers.send_init().await?;
 ///
 /// // Update fan speed based on temperature
-/// controllers.update_channel(1, 1, 45.0).await?;
+/// controllers.update_channel(1, 1, 45.0, 50).await?;
 /// # Ok(())
 /// # }
 /// ```
 #[derive(Debug, Clone)]
-pub struct Controllers(Arc<Vec<Box<dyn FanController>>>);
+pub struct ControllerManager(Arc<Vec<Box<dyn FanController>>>);
 
 static HIDAPI: LazyLock<Option<HidApi>> = LazyLock::new(|| match HidApi::new() {
     std::result::Result::Ok(api) => {
-        log::info!("HID API initialized successfully");
+        info!("HID API initialized successfully");
         Some(api)
     }
     std::result::Result::Err(e) => {
-        log::warn!(
+        warn!(
             "HID API unavailable: {}. Hardware control will be disabled.",
             e
         );
@@ -56,37 +56,7 @@ static HIDAPI: LazyLock<Option<HidApi>> = LazyLock::new(|| match HidApi::new() {
     }
 });
 
-impl Controllers {
-    /// Creates a new Controllers instance with auto-detected hardware.
-    ///
-    /// Automatically detects and initializes all connected Thermaltake devices
-    /// with the specified initial fan speed.
-    ///
-    /// # Arguments
-    ///
-    /// * `init_speed` - Initial fan speed percentage (0-100)
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if HID initialization fails or no devices are found.
-    #[allow(dead_code)]
-    pub fn init(init_speed: u8) -> Result<Self> {
-        let mut controllers = Vec::<Box<dyn FanController>>::new();
-
-        match HIDAPI.as_ref() {
-            Some(hidapi) => {
-                controllers.extend(drivers::tt_riing_quad::TTRiingQuad::probe(
-                    hidapi, init_speed,
-                )?);
-            }
-            None => {
-                log::warn!("HID API not available, no hardware controllers will be initialized");
-            }
-        }
-
-        Ok(Self(Arc::new(controllers)))
-    }
-
+impl ControllerManager {
     /// Creates empty Controllers for testing purposes.
     #[cfg(test)]
     pub fn empty() -> Self {
@@ -107,22 +77,16 @@ impl Controllers {
     /// Returns an error if device initialization fails or configuration is invalid.
     pub fn init_from_cfg(cfg: &Config) -> Result<Self> {
         let mut controllers = Vec::<Box<dyn FanController>>::new();
-        let curve_map: HashMap<String, FanCurve> = cfg
-            .curves
-            .iter()
-            .map(|c| (c.get_id(), FanCurve::from(c)))
-            .collect();
 
         match HIDAPI.as_ref() {
             Some(hidapi) => {
                 controllers.extend(drivers::tt_riing_quad::TTRiingQuad::find_controllers(
                     hidapi,
                     &cfg.controllers,
-                    &curve_map,
                 )?);
             }
             None => {
-                log::warn!("HID API not available, no hardware controllers will be initialized");
+                warn!("HID API not available, no hardware controllers will be initialized");
             }
         }
 
@@ -156,9 +120,15 @@ impl Controllers {
     /// # Errors
     ///
     /// Returns an error if the controller/channel is not found or update fails.
-    pub async fn update_channel(&self, controller: u8, channel: u8, temp: f32) -> Result<()> {
+    pub async fn update_channel(
+        &self,
+        controller: u8,
+        channel: u8,
+        temp: f32,
+        speed: u8,
+    ) -> Result<()> {
         self.get_device(controller)?
-            .update_channel(channel, temp)
+            .update_channel(channel, temp, speed)
             .await
     }
 
@@ -188,41 +158,6 @@ impl Controllers {
             .await
     }
 
-    /// Switches the active fan curve for a specific channel.
-    ///
-    /// # Arguments
-    ///
-    /// * `controller` - Controller index (1-based)
-    /// * `channel` - Fan channel on the controller (1-based)  
-    /// * `curve` - Name of the curve to activate
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the controller/channel is not found or curve doesn't exist.
-    pub async fn switch_curve(&self, controller: u8, channel: u8, curve: &str) -> Result<()> {
-        self.get_device(controller)?
-            .switch_curve(channel, curve)
-            .await
-    }
-
-    /// Gets the name of the currently active curve for a channel.
-    ///
-    /// # Arguments
-    ///
-    /// * `controller` - Controller index (1-based)
-    /// * `channel` - Fan channel on the controller (1-based)
-    ///
-    /// # Returns
-    ///
-    /// The name of the currently active curve.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the controller/channel is not found.
-    pub async fn get_active_curve(&self, controller: u8, channel: u8) -> Result<String> {
-        self.get_device(controller)?.get_active_curve(channel).await
-    }
-
     /// Gets the firmware version of a specific controller.
     ///
     /// # Arguments
@@ -238,30 +173,6 @@ impl Controllers {
     /// Returns an error if the controller is not found or communication fails.
     pub async fn get_firmware_version(&self, controller: u8) -> Result<(u8, u8, u8)> {
         self.get_device(controller)?.firmware_version().await
-    }
-
-    /// Updates curve data for a specific channel.
-    ///
-    /// # Arguments
-    ///
-    /// * `controller` - Controller index (1-based)
-    /// * `channel` - Fan channel on the controller (1-based)
-    /// * `curve` - Name of the curve to update
-    /// * `curve_data` - New curve configuration
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the controller/channel is not found or update fails.
-    pub async fn update_curve_data(
-        &self,
-        controller: u8,
-        channel: u8,
-        curve: &str,
-        curve_data: &FanCurve,
-    ) -> Result<()> {
-        self.get_device(controller)?
-            .update_curve_data(channel, curve, curve_data)
-            .await
     }
 
     #[allow(clippy::borrowed_box)]

@@ -1,20 +1,14 @@
-use crate::fan_curve::FanCurve;
-use crate::{config::ControllerCfg, fan_controller::FanController};
-use std::{collections::HashMap, sync::Arc};
+use crate::{config::ControllerCfg, drivers::fan_controller::FanController};
+use std::sync::Arc;
 
-use anyhow::{Ok, Result, anyhow};
+use anyhow::{Ok, Result};
 use async_trait::async_trait;
 use hidapi::{HidApi, HidDevice};
-use log::info;
 use tokio::sync::{Mutex, MutexGuard};
+#[allow(unused_imports)]
+use tracing::{debug, info};
 
 use super::controller::{Controller, Fan};
-
-/// Thermaltake Vendor ID for HID devices.
-pub const VID: u16 = 0x264A; // Thermaltake
-
-/// Default fan speed percentage used during initialization.
-pub const DEFAULT_PERCENT: u8 = 50;
 
 /// Thermaltake Riing Quad fan controller implementation.
 ///
@@ -27,15 +21,21 @@ pub const DEFAULT_PERCENT: u8 = 50;
 /// ```no_run
 /// use hidapi::HidApi;
 /// use tt_riingd::drivers::tt_riing_quad::TTRiingQuad;
-/// use tt_riingd::fan_controller::FanController;
+/// use tt_riingd::drivers::fan_controller::FanController;
+/// use tt_riingd::config::{ControllerCfg, UsbSelector, FanCfg};
 ///
 /// # async fn example() -> anyhow::Result<()> {
 /// let api = HidApi::new()?;
-/// let controllers = TTRiingQuad::probe(&api, 50)?;
+/// let config = vec![ControllerCfg::RiingQuad {
+///     id: "main".to_string(),
+///     usb: UsbSelector { vid: 0x264a, pid: 0x2330, serial: None },
+///     fans: vec![FanCfg { idx: 1, name: "Fan 1".to_string() }],
+/// }];
+/// let controllers = TTRiingQuad::find_controllers(&api, &config)?;
 ///
 /// for controller in controllers {
 ///     controller.send_init().await?;
-///     controller.update_speeds(45.0).await?;
+///     controller.update_channel(1, 45.0, 50).await?;
 /// }
 /// # Ok(())
 /// # }
@@ -48,131 +48,26 @@ impl FanController for TTRiingQuad {
     async fn send_init(&self) -> Result<()> {
         #[cfg(debug_assertions)]
         {
-            info!("Initializing TTRiingQuad controller");
+            debug!("Initializing TTRiingQuad controller");
         }
         self.read().await.init()
     }
 
-    async fn update_speeds(&self, temp: f32) -> Result<()> {
-        #[cfg(debug_assertions)]
-        {
-            info!("Updating speeds for TTRiingQuad controller");
-        }
-        for idx in 0..5 {
-            self.process_fan(idx, temp).await?;
-        }
-        Ok(())
-    }
-
-    async fn update_channel(&self, channel: u8, temp: f32) -> Result<()> {
-        self.process_fan((channel - 1) as usize, temp).await
+    async fn update_channel(&self, channel: u8, temp: f32, speed: u8) -> Result<()> {
+        self.process_fan((channel - 1) as usize, temp, speed).await
     }
 
     async fn update_channel_color(&self, channel: u8, red: u8, green: u8, blue: u8) -> Result<()> {
         self.process_fan_color((channel - 1) as usize, green, red, blue)
             .await
     }
-    async fn switch_curve(&self, channel: u8, curve: &str) -> Result<()> {
-        #[cfg(debug_assertions)]
-        {
-            info!(
-                "Switching curve for TTRiingQuad controller on channel {}",
-                channel
-            );
-        }
-        self.read()
-            .await
-            .fans
-            .get_mut((channel - 1) as usize)
-            .map(|fan| fan.update_curve(curve))
-            .ok_or(anyhow! {"Fan not found"})?
-    }
-
-    async fn get_active_curve(&self, channel: u8) -> Result<String> {
-        #[cfg(debug_assertions)]
-        {
-            info!(
-                "Getting active curve for TTRiingQuad controller on channel {}",
-                channel
-            );
-        }
-        self.read()
-            .await
-            .fans
-            .get((channel - 1) as usize)
-            .map(|fan| fan.get_active_curve())
-            .ok_or(anyhow!("Fans not found"))?
-    }
 
     async fn firmware_version(&self) -> Result<(u8, u8, u8)> {
         self.read().await.get_firmware_version()
     }
-
-    async fn update_curve_data(
-        &self,
-        channel: u8,
-        curve: &str,
-        curve_data: &FanCurve,
-    ) -> Result<()> {
-        #[cfg(debug_assertions)]
-        {
-            info!(
-                "Updating curve data for TTRiingQuad controller on channel {}",
-                channel
-            );
-        }
-        self.read()
-            .await
-            .fans
-            .get_mut((channel - 1) as usize)
-            .map(|fan| fan.update_curve_data(curve, curve_data))
-            .ok_or(anyhow!("Fans not found"))?
-    }
 }
 
 impl TTRiingQuad {
-    /// Auto-detects and creates controllers for all connected Thermaltake devices.
-    ///
-    /// Scans for all HID devices with Thermaltake vendor ID and creates
-    /// controller instances with default configuration.
-    ///
-    /// # Arguments
-    ///
-    /// * `api` - HID API instance for device communication
-    /// * `speed` - Initial fan speed percentage (0-100)
-    ///
-    /// # Returns
-    ///
-    /// A vector of boxed FanController trait objects for each detected device.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if HID communication fails during device enumeration.
-    pub fn probe(api: &HidApi, speed: u8) -> Result<Vec<Box<dyn FanController>>> {
-        Ok(api
-            .device_list()
-            .filter(|d| d.vendor_id() == VID)
-            .inspect(|d| info!("{:?} device PID={:04X}", d.product_string(), d.product_id()))
-            .enumerate()
-            .filter_map(|(idx, d)| {
-                api.open(d.vendor_id(), d.product_id()).ok().map(|device| {
-                    Box::new(TTRiingQuad(Arc::new(Mutex::new(Controller {
-                        name: format!("TTRiingQuad: {}", idx + 1),
-                        dev: device,
-                        fans: (0..5)
-                            .map(|_| Fan {
-                                current_speed: speed,
-                                current_rpm: 0,
-                                active_curve: String::from("Constant"),
-                                curve: build_default_curves(),
-                            })
-                            .collect(),
-                    })))) as Box<dyn FanController>
-                })
-            })
-            .collect())
-    }
-
     /// Creates controllers from configuration specifications.
     ///
     /// Initializes controllers based on the provided configuration, including
@@ -195,7 +90,6 @@ impl TTRiingQuad {
     pub fn find_controllers(
         api: &HidApi,
         ctrl_cfg: &[ControllerCfg],
-        curve_map: &HashMap<String, FanCurve>,
     ) -> Result<Vec<Box<dyn FanController>>> {
         Ok(ctrl_cfg
             .iter()
@@ -206,19 +100,9 @@ impl TTRiingQuad {
                         dev: api.open(usb.vid, usb.pid).unwrap(),
                         fans: fans
                             .iter()
-                            .map(|fan| Fan {
+                            .map(|_| Fan {
                                 current_speed: 0,
                                 current_rpm: 0,
-                                active_curve: fan.active_curve.clone(),
-                                curve: fan
-                                    .curve
-                                    .iter()
-                                    .filter_map(|curve_str| {
-                                        curve_map
-                                            .get(curve_str)
-                                            .map(|curve| (curve_str.clone(), curve.clone()))
-                                    })
-                                    .collect(),
                             })
                             .collect(),
                     })))) as Box<dyn FanController>)
@@ -229,26 +113,21 @@ impl TTRiingQuad {
             .collect())
     }
 
-    async fn process_fan(&self, idx: usize, temp: f32) -> Result<()> {
-        let speed = {
-            let guard = self.0.lock().await;
-            guard.fans[idx].compute_speed(temp)?
-        };
+    async fn process_fan(&self, idx: usize, _temp: f32, speed: u8) -> Result<()> {
         #[cfg(debug_assertions)]
         {
-            info!("Computed speed for fan {}: {}", idx + 1, speed);
+            debug!("Computed speed for fan {}: {}", idx + 1, speed);
         }
         let ctrl = self.0.clone();
-        // let (speed, rpm) = tokio::time::timeout(std::time::Duration::from_millis(READ_TIMEOUT as _), async move {
         let (speed, rpm) = tokio::task::spawn_blocking(move || {
             let guard = ctrl.blocking_lock();
             #[cfg(debug_assertions)]
             {
-                info!(
+                debug!(
                     "Processing fan {} on controller {}: {}°C",
                     idx + 1,
                     guard.name,
-                    temp
+                    _temp
                 );
             }
             Self::proccess_fan_inner(guard, idx, speed)
@@ -293,33 +172,4 @@ impl TTRiingQuad {
     ) -> Result<()> {
         guard.set_rgb((idx + 1) as u8, 0x24, vec![(green, red, blue); 52])
     }
-}
-
-/// Creates default fan curves for controller initialization.
-///
-/// Provides standard curve definitions including constant speed,
-/// step-based curves, and Bezier curves for initial controller setup.
-fn build_default_curves() -> HashMap<String, FanCurve> {
-    HashMap::from([
-        (
-            String::from("Constant"),
-            FanCurve::Constant(DEFAULT_PERCENT),
-        ),
-        (
-            String::from("StepCurve"),
-            FanCurve::StepCurve {
-                temps: (0..=100).step_by(5).map(|t| t as f32).collect(),
-                speeds: (0..=100).step_by(5).map(|s| s as u8).collect(),
-            },
-        ),
-        (
-            String::from("BezierCurve"),
-            FanCurve::BezierCurve {
-                points: [(0., 0.), (40., 60.), (60., 40.), (100., 100.)]
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
-            },
-        ),
-    ])
 }

@@ -2,9 +2,9 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use log::info;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
+use tracing::info;
 use zbus::Connection;
 
 use crate::{

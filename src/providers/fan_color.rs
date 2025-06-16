@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use log::info;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
+use tracing::{error, info, warn};
 
 use crate::{
     app_context::AppState,
@@ -107,18 +107,18 @@ async fn run_fan_color_service(
             }
             _instant = interval.tick() => {
                 if let Err(e) = update_fan_colors_by_temperature(&state, &event_bus).await {
-                    log::error!("Failed to update fan colors: {e}");
+                    error!("Failed to update fan colors: {e}");
                 }
             }
             event_result = receiver.recv() => {
                 match event_result {
                     Ok(Event::TemperatureChanged(_sensor_data)) => {
                         if let Err(e) = update_fan_colors_by_temperature(&state, &event_bus).await {
-                            log::error!("Failed to update fan colors on temperature change: {e}");
+                            error!("Failed to update fan colors on temperature change: {e}");
                         }
                     }
                     Err(e) => {
-                        log::error!("Failed to receive event: {e}");
+                        error!("Failed to receive event: {e}");
                     }
                     _ => {}
                 }
@@ -137,7 +137,7 @@ async fn update_fan_colors_by_temperature(
 
     for (color, fan_refs_map) in color_mappings.color_to_fans_iter() {
         if fan_refs_map.is_empty() {
-            log::warn!("Color mapping '{}' has no targets", color);
+            warn!("Color mapping '{}' has no targets", color);
             continue;
         }
 
@@ -162,21 +162,19 @@ async fn update_fan_colors_by_temperature(
                     )
                     .await
                 {
-                    log::error!(
+                    error!(
                         "Failed to set color '{}' on controller {} fan {}: {e}",
-                        color,
-                        fan_ref.controller_id,
-                        fan_ref.channel,
+                        color, fan_ref.controller_id, fan_ref.channel,
                     );
                 }
             }
         } else {
-            log::warn!("Color '{}' not found in configuration", color);
+            warn!("Color '{}' not found in configuration", color);
         }
     }
 
     if let Err(e) = event_bus.publish(Event::ColorChanged) {
-        log::error!("Failed to publish color change event: {e}");
+        error!("Failed to publish color change event: {e}");
     }
 
     Ok(())

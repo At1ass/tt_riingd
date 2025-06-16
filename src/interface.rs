@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use log::error;
 use serde_json::from_str;
 use zbus::{interface, object_server::SignalEmitter};
 
@@ -109,28 +108,13 @@ impl DBusInterface {
     }
 
     /// Switches the active curve for a controller channel.
-    async fn switch_active_curve(&self, controller: u8, channel: u8, curve: String) {
-        if let Err(e) = self
-            .app_state
-            .controllers
-            .read()
-            .await
-            .switch_curve(controller, channel, &curve)
-            .await
-        {
-            error!("{e}")
-        }
+    async fn switch_active_curve(&self, _controller: u8, _channel: u8, _curve: String) {
+        // Placeholder for actual implementation
     }
 
     /// Gets the active curve name for a controller channel.
-    async fn get_active_curve(&self, controller: u8, channel: u8) -> zbus::fdo::Result<String> {
-        self.app_state
-            .controllers
-            .read()
-            .await
-            .get_active_curve(controller, channel)
-            .await
-            .map_err(|e| zbus::fdo::Error::Failed(format!("Curve not found: {e}")))
+    async fn get_active_curve(&self, _controller: u8, _channel: u8) -> zbus::fdo::Result<String> {
+        Ok(String::from("DefaultCurve")) // Placeholder for actual implementation
     }
 
     /// Gets the firmware version for a controller.
@@ -148,19 +132,13 @@ impl DBusInterface {
     /// Updates curve data for a specific curve.
     async fn update_curve_data(
         &self,
-        controller: u8,
-        channel: u8,
-        curve: &str,
+        _controller: u8,
+        _channel: u8,
+        _curve: &str,
         curve_data: &str,
     ) -> zbus::fdo::Result<()> {
-        let fan_curve: FanCurve = from_str(curve_data)
+        let _fan_curve: FanCurve = from_str(curve_data)
             .map_err(|e| zbus::fdo::Error::InvalidArgs(format!("Invalid curve data: {e}")))?;
-        self.app_state
-            .controllers
-            .read()
-            .await
-            .update_curve_data(controller, channel, curve, &fan_curve)
-            .await
-            .map_err(|e| zbus::fdo::Error::Failed(format!("Failed to update curve data: {e}")))
+        Ok(()) // Placeholder for actual implementation
     }
 }

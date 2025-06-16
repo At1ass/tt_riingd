@@ -89,6 +89,8 @@ impl From<&CurveCfg> for FanCurve {
     }
 }
 
+impl FanCurve {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,6 +415,358 @@ mod tests {
         match curve {
             FanCurve::Constant(speed) => assert_eq!(speed, 0),
             _ => panic!("Should handle zero speed value"),
+        }
+    }
+
+    // Additional comprehensive edge case tests
+
+    #[test]
+    fn point_floating_point_precision() {
+        // Test with very small floating point differences
+        let point1 = Point {
+            x: 1.0000001,
+            y: 2.0000001,
+        };
+        let point2 = Point {
+            x: 1.0000002,
+            y: 2.0000002,
+        };
+
+        // Points should be different due to floating point precision
+        assert_ne!(point1.x, point2.x);
+        assert_ne!(point1.y, point2.y);
+
+        // Test with NaN values (should be handled gracefully)
+        let point_nan = Point {
+            x: f32::NAN,
+            y: 50.0,
+        };
+        assert!(point_nan.x.is_nan());
+        assert_eq!(point_nan.y, 50.0);
+
+        // Test with infinity values
+        let point_inf = Point {
+            x: f32::INFINITY,
+            y: f32::NEG_INFINITY,
+        };
+        assert!(point_inf.x.is_infinite() && point_inf.x.is_sign_positive());
+        assert!(point_inf.y.is_infinite() && point_inf.y.is_sign_negative());
+    }
+
+    #[test]
+    fn fan_curve_partial_eq_comprehensive() {
+        // Test all combinations of curve types
+        let constant1 = FanCurve::Constant(50);
+        let constant2 = FanCurve::Constant(75);
+        let step_curve = FanCurve::StepCurve {
+            temps: vec![30.0, 70.0],
+            speeds: vec![30, 80],
+        };
+        let bezier_curve = FanCurve::BezierCurve {
+            points: vec![Point { x: 30.0, y: 30.0 }, Point { x: 70.0, y: 80.0 }],
+        };
+
+        // Same variant types should be equal (current implementation)
+        assert_eq!(constant1, constant2);
+        // Different variant types should not be equal
+        assert_ne!(constant1, step_curve);
+        assert_ne!(step_curve, bezier_curve);
+
+        // Test with empty collections
+        let empty_step = FanCurve::StepCurve {
+            temps: vec![],
+            speeds: vec![],
+        };
+        let empty_bezier = FanCurve::BezierCurve { points: vec![] };
+        assert_ne!(empty_step, empty_bezier); // Different types should not be equal
+    }
+
+    #[test]
+    fn step_curve_edge_cases() {
+        // Test with single temperature point
+        let single_temp = FanCurve::StepCurve {
+            temps: vec![50.0],
+            speeds: vec![75],
+        };
+
+        match single_temp {
+            FanCurve::StepCurve { temps, speeds } => {
+                assert_eq!(temps.len(), 1);
+                assert_eq!(speeds.len(), 1);
+                assert_eq!(temps[0], 50.0);
+                assert_eq!(speeds[0], 75);
+            }
+            _ => panic!("Should preserve single point step curve"),
+        }
+
+        // Test with duplicate temperature points
+        let duplicate_temps = FanCurve::StepCurve {
+            temps: vec![50.0, 50.0, 50.0],
+            speeds: vec![25, 50, 75],
+        };
+
+        match duplicate_temps {
+            FanCurve::StepCurve { temps, speeds } => {
+                assert_eq!(temps.len(), 3);
+                assert_eq!(speeds.len(), 3);
+                assert!(temps.iter().all(|&t| t == 50.0));
+            }
+            _ => panic!("Should handle duplicate temperatures"),
+        }
+
+        // Test with unsorted temperatures
+        let unsorted_temps = FanCurve::StepCurve {
+            temps: vec![70.0, 30.0, 50.0],
+            speeds: vec![80, 30, 50],
+        };
+
+        match unsorted_temps {
+            FanCurve::StepCurve { temps, speeds } => {
+                assert_eq!(temps, vec![70.0, 30.0, 50.0]); // Should preserve original order
+                assert_eq!(speeds, vec![80, 30, 50]);
+            }
+            _ => panic!("Should preserve unsorted temperatures"),
+        }
+    }
+
+    #[test]
+    fn bezier_curve_edge_cases() {
+        // Test with single point
+        let single_point = FanCurve::BezierCurve {
+            points: vec![Point { x: 50.0, y: 75.0 }],
+        };
+
+        match single_point {
+            FanCurve::BezierCurve { points } => {
+                assert_eq!(points.len(), 1);
+                assert_eq!(points[0].x, 50.0);
+                assert_eq!(points[0].y, 75.0);
+            }
+            _ => panic!("Should handle single point bezier curve"),
+        }
+
+        // Test with many points (stress test)
+        let many_points: Vec<Point> = (0..1000)
+            .map(|i| Point {
+                x: i as f32,
+                y: (i % 256) as f32,
+            })
+            .collect();
+
+        let large_bezier = FanCurve::BezierCurve {
+            points: many_points.clone(),
+        };
+
+        match large_bezier {
+            FanCurve::BezierCurve { points } => {
+                assert_eq!(points.len(), 1000);
+                assert_eq!(points[0].x, 0.0);
+                assert_eq!(points[999].x, 999.0);
+            }
+            _ => panic!("Should handle large bezier curves"),
+        }
+
+        // Test with extreme coordinate values
+        let extreme_points = FanCurve::BezierCurve {
+            points: vec![
+                Point {
+                    x: f32::MIN,
+                    y: 0.0,
+                },
+                Point {
+                    x: f32::MAX,
+                    y: 255.0,
+                },
+                Point {
+                    x: 0.0,
+                    y: f32::MIN,
+                },
+                Point {
+                    x: 100.0,
+                    y: f32::MAX,
+                },
+            ],
+        };
+
+        match extreme_points {
+            FanCurve::BezierCurve { points } => {
+                assert_eq!(points.len(), 4);
+                assert_eq!(points[0].x, f32::MIN);
+                assert_eq!(points[1].x, f32::MAX);
+                assert_eq!(points[2].y, f32::MIN);
+                assert_eq!(points[3].y, f32::MAX);
+            }
+            _ => panic!("Should handle extreme coordinate values"),
+        }
+    }
+
+    #[test]
+    fn serde_edge_cases() {
+        // Test serialization with extreme values
+        let extreme_constant = FanCurve::Constant(u8::MAX);
+        let serialized = serde_json::to_string(&extreme_constant).unwrap();
+        let deserialized: FanCurve = serde_json::from_str(&serialized).unwrap();
+
+        match deserialized {
+            FanCurve::Constant(speed) => assert_eq!(speed, u8::MAX),
+            _ => panic!("Should handle extreme constant values"),
+        }
+
+        // Test with empty step curve
+        let empty_step = FanCurve::StepCurve {
+            temps: vec![],
+            speeds: vec![],
+        };
+        let serialized_empty = serde_json::to_string(&empty_step).unwrap();
+        let deserialized_empty: FanCurve = serde_json::from_str(&serialized_empty).unwrap();
+
+        match deserialized_empty {
+            FanCurve::StepCurve { temps, speeds } => {
+                assert!(temps.is_empty());
+                assert!(speeds.is_empty());
+            }
+            _ => panic!("Should handle empty step curves"),
+        }
+
+        // Test with special float values in bezier curve
+        let special_floats = FanCurve::BezierCurve {
+            points: vec![
+                Point { x: 0.0, y: 0.0 },
+                Point {
+                    x: f32::EPSILON,
+                    y: f32::MIN_POSITIVE,
+                },
+                Point { x: 100.0, y: 100.0 },
+            ],
+        };
+
+        let serialized_special = serde_json::to_string(&special_floats).unwrap();
+        let deserialized_special: FanCurve = serde_json::from_str(&serialized_special).unwrap();
+
+        match deserialized_special {
+            FanCurve::BezierCurve { points } => {
+                assert_eq!(points.len(), 3);
+                assert_eq!(points[1].x, f32::EPSILON);
+                assert_eq!(points[1].y, f32::MIN_POSITIVE);
+            }
+            _ => panic!("Should handle special float values"),
+        }
+    }
+
+    #[test]
+    fn memory_efficiency_test() {
+        // Test that large curves don't cause memory issues
+        let large_temps: Vec<f32> = (0..10000).map(|i| i as f32 * 0.01).collect();
+        let large_speeds: Vec<u8> = (0..10000).map(|i| (i % 256) as u8).collect();
+
+        let large_step_curve = FanCurve::StepCurve {
+            temps: large_temps.clone(),
+            speeds: large_speeds.clone(),
+        };
+
+        // Clone should work efficiently
+        let cloned_curve = large_step_curve.clone();
+
+        match (&large_step_curve, &cloned_curve) {
+            (
+                FanCurve::StepCurve {
+                    temps: t1,
+                    speeds: s1,
+                },
+                FanCurve::StepCurve {
+                    temps: t2,
+                    speeds: s2,
+                },
+            ) => {
+                assert_eq!(t1.len(), 10000);
+                assert_eq!(s1.len(), 10000);
+                assert_eq!(t1, t2);
+                assert_eq!(s1, s2);
+            }
+            _ => panic!("Large curve cloning should work"),
+        }
+    }
+
+    #[test]
+    fn debug_formatting_comprehensive() {
+        // Test debug formatting for all curve types with various data
+        let constant = FanCurve::Constant(42);
+        let debug_constant = format!("{:?}", constant);
+        assert!(debug_constant.contains("Constant"));
+        assert!(debug_constant.contains("42"));
+
+        let step_curve = FanCurve::StepCurve {
+            temps: vec![10.5, 20.7, 30.9],
+            speeds: vec![15, 45, 85],
+        };
+        let debug_step = format!("{:?}", step_curve);
+        assert!(debug_step.contains("StepCurve"));
+        assert!(debug_step.contains("10.5"));
+        assert!(debug_step.contains("85"));
+
+        let bezier_curve = FanCurve::BezierCurve {
+            points: vec![Point { x: 1.23, y: 4.56 }, Point { x: 7.89, y: 0.12 }],
+        };
+        let debug_bezier = format!("{:?}", bezier_curve);
+        assert!(debug_bezier.contains("BezierCurve"));
+        assert!(debug_bezier.contains("1.23"));
+        assert!(debug_bezier.contains("4.56"));
+        assert!(debug_bezier.contains("7.89"));
+        assert!(debug_bezier.contains("0.12"));
+
+        // Test point debug formatting with extreme values
+        let extreme_point = Point {
+            x: f32::MAX,
+            y: f32::MIN,
+        };
+        let debug_extreme = format!("{:?}", extreme_point);
+        assert!(debug_extreme.contains("Point"));
+    }
+
+    #[test]
+    fn from_trait_comprehensive() {
+        use crate::config::CurveCfg;
+
+        // Test From trait with various configurations
+        let constant_cfg = CurveCfg::Constant {
+            id: "test_constant".to_string(),
+            speed: 0, // Minimum speed
+        };
+        let curve_from_constant = FanCurve::from(&constant_cfg);
+        match curve_from_constant {
+            FanCurve::Constant(speed) => assert_eq!(speed, 0),
+            _ => panic!("From trait should create Constant curve"),
+        }
+
+        let step_cfg = CurveCfg::StepCurve {
+            id: "test_step".to_string(),
+            tmps: vec![], // Empty arrays
+            spds: vec![],
+        };
+        let curve_from_step = FanCurve::from(&step_cfg);
+        match curve_from_step {
+            FanCurve::StepCurve { temps, speeds } => {
+                assert!(temps.is_empty());
+                assert!(speeds.is_empty());
+            }
+            _ => panic!("From trait should create StepCurve"),
+        }
+
+        let bezier_cfg = CurveCfg::Bezier {
+            id: "test_bezier".to_string(),
+            points: vec![Point {
+                x: f32::INFINITY,
+                y: f32::NEG_INFINITY,
+            }],
+        };
+        let curve_from_bezier = FanCurve::from(&bezier_cfg);
+        match curve_from_bezier {
+            FanCurve::BezierCurve { points } => {
+                assert_eq!(points.len(), 1);
+                assert!(points[0].x.is_infinite());
+                assert!(points[0].y.is_infinite());
+            }
+            _ => panic!("From trait should create BezierCurve"),
         }
     }
 }

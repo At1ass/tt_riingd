@@ -1,10 +1,10 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use log::info;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
+use tracing::{error, info};
 
 use crate::{
     app_context::AppState,
@@ -116,7 +116,7 @@ async fn broadcast_current_state(state: &Arc<AppState>, event_bus: &EventBus) {
     let sensor_data = state.sensor_data.read().await.clone();
 
     if let Err(e) = event_bus.publish(Event::TemperatureChanged(sensor_data)) {
-        log::error!("Failed to broadcast temperature state: {e}");
+        error!("Failed to broadcast temperature state: {e}");
     }
 }
 

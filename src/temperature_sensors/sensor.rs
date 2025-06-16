@@ -15,7 +15,7 @@ use async_trait::async_trait;
 /// # Example
 ///
 /// ```no_run
-/// use tt_riingd::sensors::TemperatureSensor;
+/// use tt_riingd::temperature_sensors::sensor::TemperatureSensor;
 /// use anyhow::Result;
 ///
 /// struct MockSensor;

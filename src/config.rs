@@ -5,7 +5,6 @@
 
 use crate::fan_curve::Point;
 use anyhow::{Context, Result};
-use log::info;
 use serde::{Deserialize, Serialize};
 use std::{
     env, fs,
@@ -13,8 +12,15 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::RwLock;
+use tracing::info;
 
 use crate::event::ConfigChangeType;
+
+/// Maximum iterations for Bezier curve binary search.
+const MAX_ITERATIONS: usize = 100;
+
+/// Precision epsilon for Bezier curve calculations.
+const EPSILON: f32 = 1e-6;
 
 /// Main configuration structure for the tt_riingd daemon.
 ///
@@ -75,6 +81,10 @@ pub struct Config {
     #[serde(default)]
     pub mappings: Vec<MappingCfg>,
 
+    /// Mappings between curves and fan targets.
+    #[serde(default)]
+    pub active_curve_mappings: Vec<CurveMappingCfg>,
+
     /// Available RGB color definitions.
     #[serde(default)]
     pub colors: Vec<ColorCfg>,
@@ -116,14 +126,8 @@ pub struct FanCfg {
 
     /// Human-readable name for this fan.
     pub name: String,
-
-    /// Name of the currently active speed curve.
-    pub active_curve: String,
-
-    /// List of available curve names for this fan.
-    /// Note: This is a simple Vec<String> for curve references.
-    /// A future enhancement could use HashMap<String, CurveCfg> for direct curve storage.
-    pub curve: Vec<String>,
+    // /// Name of the currently active speed curve.
+    // pub active_curve: String,
 }
 
 /// Fan curve configuration variants for temperature-based control.
@@ -160,6 +164,65 @@ pub enum CurveCfg {
     },
 }
 
+/// Computes a point on a Bezier curve at parameter t.
+///
+/// # Arguments
+///
+/// * `pts` - Array of 4 control points defining the Bezier curve
+/// * `t` - Parameter value (0.0 to 1.0)
+///
+/// # Returns
+///
+/// The computed point on the curve.
+fn compute_bezier_at_t(pts: &[Point], t: f32) -> Point {
+    let u = 1.0 - t;
+    let tt = t * t;
+    let uu = u * u;
+    let uuu = uu * u;
+    let ttt = tt * t;
+
+    let x = uuu * pts[0].x + 3.0 * uu * t * pts[1].x + 3.0 * u * tt * pts[2].x + ttt * pts[3].x;
+    let y = uuu * pts[0].y + 3.0 * uu * t * pts[1].y + 3.0 * u * tt * pts[2].y + ttt * pts[3].y;
+
+    Point { x, y }
+}
+
+/// Finds the fan speed for a given temperature using Bezier curve interpolation.
+///
+/// Uses binary search to find the parameter t where the curve's x-coordinate
+/// matches the given temperature, then returns the corresponding y-coordinate.
+///
+/// # Arguments
+///
+/// * `pts` - Array of 4 control points defining the Bezier curve
+/// * `temp` - Temperature to find speed for
+///
+/// # Returns
+///
+/// The interpolated fan speed for the given temperature.
+fn get_speed_for_temp(pts: &[Point], temp: f32) -> f32 {
+    let mut t_low = 0.0_f32;
+    let mut t_high = 1.0_f32;
+    let mut t_mid = 0.0_f32;
+
+    for _ in 0..MAX_ITERATIONS {
+        t_mid = (t_low + t_high) * 0.5;
+        let p = compute_bezier_at_t(pts, t_mid);
+
+        if (p.x - temp).abs() < EPSILON {
+            return p.y;
+        }
+        if p.x < temp {
+            t_low = t_mid;
+        } else {
+            t_high = t_mid;
+        }
+    }
+
+    let p = compute_bezier_at_t(pts, t_mid);
+    p.y
+}
+
 impl CurveCfg {
     /// Gets the unique identifier for this curve.
     ///
@@ -171,6 +234,56 @@ impl CurveCfg {
             CurveCfg::Constant { id, .. } => id.clone(),
             CurveCfg::StepCurve { id, .. } => id.clone(),
             CurveCfg::Bezier { id, .. } => id.clone(),
+        }
+    }
+
+    pub fn calculate_speed(&self, temperature: f32) -> Result<u8> {
+        match self {
+            CurveCfg::Constant { speed, .. } => Ok(*speed),
+            CurveCfg::StepCurve { tmps, spds, .. } => {
+                if tmps.len() != spds.len() {
+                    return Err(anyhow::anyhow!(
+                        "Temperature and speed arrays must have the same length".to_string()
+                    ));
+                }
+                if tmps.is_empty() {
+                    return Err(anyhow::anyhow!("Step curve cannot be empty".to_string()));
+                }
+                for i in 0..tmps.len() - 1 {
+                    if temperature >= tmps[i] && temperature < tmps[i + 1] {
+                        let t = (temperature - tmps[i]) / (tmps[i + 1] - tmps[i]);
+                        let speed = (spds[i] as f32 * (1.0 - t) + spds[i + 1] as f32 * t) as u8;
+                        return Ok(speed);
+                    }
+                }
+                if temperature < tmps[0] {
+                    return Ok(spds[0]);
+                }
+                Ok(*spds.last().unwrap())
+            }
+            CurveCfg::Bezier { points, .. } => {
+                if points.len() != 4 {
+                    return Err(anyhow::anyhow!(
+                        "Bezier curve must have exactly 4 control points"
+                    ));
+                }
+
+                // Сортируем точки по x (температуре) для корректной обработки граничных случаев
+                let mut sorted_points = points.clone();
+                sorted_points.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap());
+
+                // Обработка граничных случаев
+                if temperature <= sorted_points[0].x {
+                    return Ok(sorted_points[0].y.clamp(0.0, 100.0) as u8);
+                }
+                if temperature >= sorted_points[3].x {
+                    return Ok(sorted_points[3].y.clamp(0.0, 100.0) as u8);
+                }
+
+                // Используем бинарный поиск для нахождения правильной скорости
+                let speed = get_speed_for_temp(points, temperature);
+                Ok(speed.clamp(0.0, 100.0) as u8)
+            }
         }
     }
 }
@@ -186,6 +299,7 @@ impl Default for Config {
             curves: Vec::new(),
             sensors: Vec::new(),
             mappings: Vec::new(),
+            active_curve_mappings: Vec::new(),
             colors: Vec::new(),
             color_mappings: Vec::new(),
         }
@@ -243,6 +357,20 @@ pub struct MappingCfg {
     pub sensor: String,
 
     /// List of fan targets controlled by this sensor.
+    pub targets: Vec<FanTarget>,
+}
+
+/// Active curve mapping configuration for fan speed control.
+///
+/// Associates a temperature sensor with specific fan targets
+/// and their active speed curves.
+/// This allows dynamic fan speed adjustment based on temperature readings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CurveMappingCfg {
+    /// Curve identifier to apply to targets.
+    pub curve: String,
+
+    /// List of fan targets that should use this curve.
     pub targets: Vec<FanTarget>,
 }
 
@@ -307,7 +435,7 @@ pub struct UsbSelector {
 /// Temperature sensor configuration variants.
 ///
 /// Defines different types of temperature sensors that can be monitored.
-/// Currently supports lm-sensors hardware monitoring.
+/// Supports lm-sensors hardware monitoring and NVIDIA GPUs via NVML.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum SensorCfg {
@@ -321,6 +449,14 @@ pub enum SensorCfg {
 
         /// Sensor feature name (e.g., "Tctl").
         feature: String,
+    },
+    /// NVIDIA GPU temperature monitoring via NVML.
+    Nvidia {
+        /// Unique identifier for this sensor.
+        id: String,
+
+        /// GPU index (0-based, e.g., 0 for first GPU).
+        gpu_index: u32,
     },
 }
 
@@ -394,9 +530,11 @@ pub struct ConfigManager {
     path: PathBuf,
 }
 
-#[allow(dead_code)]
 impl ConfigManager {
     /// Creates a new ConfigManager with the given config and path.
+    ///
+    /// This is primarily used for testing purposes.
+    #[cfg(test)]
     pub fn new(config: Config, path: PathBuf) -> Self {
         Self {
             config: Arc::new(RwLock::new(config)),
@@ -420,17 +558,15 @@ impl ConfigManager {
         info!("Loading config from: {}", config_path.display());
         let config = Self::load_config_from_path(&config_path).await?;
 
-        Ok(Self::new(config, config_path))
+        Ok(Self {
+            config: Arc::new(RwLock::new(config)),
+            path: config_path,
+        })
     }
 
     /// Gets a read-only reference to the current configuration.
     pub async fn get(&self) -> tokio::sync::RwLockReadGuard<'_, Config> {
         self.config.read().await
-    }
-
-    /// Gets a mutable reference to the current configuration.
-    pub async fn get_mut(&self) -> tokio::sync::RwLockWriteGuard<'_, Config> {
-        self.config.write().await
     }
 
     /// Returns the path to the configuration file.
@@ -461,60 +597,11 @@ impl ConfigManager {
         Ok(current_config.analyze_changes(&new_config))
     }
 
-    /// Saves the current configuration to file.
-    pub async fn save(&self) -> Result<()> {
-        let config = self.config.read().await;
-        self.save_to_path(&config, &self.path).await
-    }
-
-    /// Saves configuration to a specific path.
-    pub async fn save_to_path(&self, config: &Config, path: &Path) -> Result<()> {
-        let config_yaml =
-            serde_yaml::to_string(config).context("Failed to serialize configuration")?;
-
-        let tmp_path = path.with_extension("yml.tmp");
-        fs::write(&tmp_path, config_yaml).with_context(|| {
-            format!("Failed to write temporary config to {}", tmp_path.display())
-        })?;
-
-        fs::rename(&tmp_path, path)
-            .with_context(|| format!("Failed to move config to {}", path.display()))?;
-
-        info!("Configuration saved to: {}", path.display());
-        Ok(())
-    }
-
-    /// Validates the current configuration.
-    pub async fn validate(&self) -> Result<()> {
-        let config = self.config.read().await;
-        config.validate()
-    }
-
     /// Clones the current configuration.
     ///
     /// Useful when you need to work with a snapshot of the config.
     pub async fn clone_config(&self) -> Config {
         self.config.read().await.clone()
-    }
-
-    /// Updates the configuration with a new one.
-    ///
-    /// This validates the new configuration before applying it.
-    pub async fn update_config(&self, new_config: Config) -> Result<()> {
-        new_config
-            .validate()
-            .context("New configuration is invalid")?;
-        *self.config.write().await = new_config;
-        info!("Configuration updated in memory");
-        Ok(())
-    }
-
-    /// Returns an `Arc<RwLock<Config>>` for sharing between services.
-    ///
-    /// This allows multiple services to access the same configuration
-    /// instance without cloning the entire config.
-    pub fn as_shared(&self) -> Arc<RwLock<Config>> {
-        self.config.clone()
     }
 
     /// Loads configuration from a specific path (internal helper).
@@ -647,6 +734,52 @@ color_mappings:
     }
 
     #[test]
+    fn curve_cfg_calculate_speed_bezier() {
+        // Создаем простую кривую Безье: линейная от 30°C/20% до 70°C/80%
+        let bezier = CurveCfg::Bezier {
+            id: "test_bezier".to_string(),
+            points: vec![
+                Point { x: 30.0, y: 20.0 }, // Начальная точка
+                Point { x: 40.0, y: 35.0 }, // Контрольная точка 1
+                Point { x: 60.0, y: 65.0 }, // Контрольная точка 2
+                Point { x: 70.0, y: 80.0 }, // Конечная точка
+            ],
+        };
+
+        // Тест граничных случаев
+        assert_eq!(bezier.calculate_speed(25.0).unwrap(), 20); // Ниже минимума
+        assert_eq!(bezier.calculate_speed(75.0).unwrap(), 80); // Выше максимума
+
+        // Тест точек на кривой
+        let speed_at_30 = bezier.calculate_speed(30.0).unwrap();
+        let speed_at_70 = bezier.calculate_speed(70.0).unwrap();
+        assert_eq!(speed_at_30, 20);
+        assert_eq!(speed_at_70, 80);
+
+        // Тест промежуточной точки
+        let speed_at_50 = bezier.calculate_speed(50.0).unwrap();
+        assert!(speed_at_50 > 20 && speed_at_50 < 80);
+    }
+
+    #[test]
+    fn curve_cfg_calculate_speed_bezier_invalid_points() {
+        // Тест с неправильным количеством точек
+        let bezier = CurveCfg::Bezier {
+            id: "invalid_bezier".to_string(),
+            points: vec![Point { x: 30.0, y: 20.0 }, Point { x: 70.0, y: 80.0 }],
+        };
+
+        let result = bezier.calculate_speed(50.0);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("exactly 4 control points")
+        );
+    }
+
+    #[test]
     fn analyze_changes_hot_reload_for_curves() {
         let mut config1 = Config::default();
         let mut config2 = Config::default();
@@ -752,5 +885,298 @@ color_mappings:
             }
             _ => panic!("Expected HotReload for identical configs"),
         }
+    }
+
+    // Additional comprehensive tests for edge cases
+
+    #[test]
+    fn curve_cfg_calculate_speed_constant_edge_cases() {
+        let constant = CurveCfg::Constant {
+            id: "test_constant".to_string(),
+            speed: 0,
+        };
+        assert_eq!(constant.calculate_speed(25.0).unwrap(), 0);
+        assert_eq!(constant.calculate_speed(-10.0).unwrap(), 0);
+        assert_eq!(constant.calculate_speed(150.0).unwrap(), 0);
+
+        let constant_max = CurveCfg::Constant {
+            id: "test_constant_max".to_string(),
+            speed: 100,
+        };
+        assert_eq!(constant_max.calculate_speed(25.0).unwrap(), 100);
+    }
+
+    #[test]
+    fn curve_cfg_calculate_speed_step_curve_edge_cases() {
+        // Empty step curve should be handled gracefully
+        let empty_step = CurveCfg::StepCurve {
+            id: "empty_step".to_string(),
+            tmps: vec![],
+            spds: vec![],
+        };
+        let result = empty_step.calculate_speed(50.0);
+        assert!(result.is_err());
+
+        // Single point step curve
+        let single_point = CurveCfg::StepCurve {
+            id: "single_point".to_string(),
+            tmps: vec![50.0],
+            spds: vec![75],
+        };
+        assert_eq!(single_point.calculate_speed(25.0).unwrap(), 75); // Below range
+        assert_eq!(single_point.calculate_speed(50.0).unwrap(), 75); // At point
+        assert_eq!(single_point.calculate_speed(75.0).unwrap(), 75); // Above range
+
+        // Reverse temperature order (should still work)
+        let reverse_temps = CurveCfg::StepCurve {
+            id: "reverse_temps".to_string(),
+            tmps: vec![70.0, 30.0], // Intentionally reversed
+            spds: vec![80, 20],
+        };
+        // Should handle gracefully by sorting internally
+        let result = reverse_temps.calculate_speed(50.0);
+        assert!(result.is_ok());
+
+        // Extreme temperature values
+        let extreme_temps = CurveCfg::StepCurve {
+            id: "extreme_temps".to_string(),
+            tmps: vec![-50.0, 0.0, 100.0, 200.0],
+            spds: vec![10, 30, 70, 100],
+        };
+        assert_eq!(extreme_temps.calculate_speed(-100.0).unwrap(), 10); // Far below
+        assert_eq!(extreme_temps.calculate_speed(300.0).unwrap(), 100); // Far above
+        // For interpolated value, just check it's reasonable
+        let interpolated = extreme_temps.calculate_speed(50.0).unwrap();
+        assert!((30..=70).contains(&interpolated)); // Should be between 30 and 70
+    }
+
+    #[test]
+    fn curve_cfg_calculate_speed_bezier_edge_cases() {
+        // Test with identical control points (degenerate case)
+        let degenerate_bezier = CurveCfg::Bezier {
+            id: "degenerate".to_string(),
+            points: vec![
+                Point { x: 50.0, y: 60.0 },
+                Point { x: 50.0, y: 60.0 },
+                Point { x: 50.0, y: 60.0 },
+                Point { x: 50.0, y: 60.0 },
+            ],
+        };
+        assert_eq!(degenerate_bezier.calculate_speed(50.0).unwrap(), 60);
+        assert_eq!(degenerate_bezier.calculate_speed(25.0).unwrap(), 60); // Below
+        assert_eq!(degenerate_bezier.calculate_speed(75.0).unwrap(), 60); // Above
+
+        // Test with extreme y-values (should be clamped)
+        let extreme_y_bezier = CurveCfg::Bezier {
+            id: "extreme_y".to_string(),
+            points: vec![
+                Point { x: 30.0, y: -10.0 }, // Below 0
+                Point { x: 40.0, y: 50.0 },
+                Point { x: 60.0, y: 50.0 },
+                Point { x: 70.0, y: 110.0 }, // Above 100
+            ],
+        };
+        let result_low = extreme_y_bezier.calculate_speed(30.0).unwrap();
+        let result_high = extreme_y_bezier.calculate_speed(70.0).unwrap();
+        assert!(result_low <= 100);
+        assert!(result_high <= 100);
+
+        // Test with non-monotonic x-values (complex curve)
+        let complex_bezier = CurveCfg::Bezier {
+            id: "complex".to_string(),
+            points: vec![
+                Point { x: 30.0, y: 20.0 },
+                Point { x: 80.0, y: 40.0 }, // Higher x than next point
+                Point { x: 40.0, y: 60.0 }, // Lower x than previous
+                Point { x: 70.0, y: 80.0 },
+            ],
+        };
+        // Should handle gracefully with binary search
+        let result = complex_bezier.calculate_speed(50.0);
+        assert!(result.is_ok());
+        let speed = result.unwrap();
+        assert!(speed <= 100);
+    }
+
+    #[test]
+    fn config_validation_edge_cases() {
+        // Test config with duplicate controller IDs
+        let mut config_duplicate_controllers: Config = Config::default();
+        config_duplicate_controllers.controllers.extend(vec![
+            ControllerCfg::RiingQuad {
+                id: "duplicate".to_string(),
+                usb: UsbSelector {
+                    vid: 0x264a,
+                    pid: 0x2330,
+                    serial: None,
+                },
+                fans: vec![],
+            },
+            ControllerCfg::RiingQuad {
+                id: "duplicate".to_string(), // Same ID
+                usb: UsbSelector {
+                    vid: 0x264a,
+                    pid: 0x2331,
+                    serial: None,
+                },
+                fans: vec![],
+            },
+        ]);
+        // Should validate successfully (duplicate IDs are allowed for now)
+        assert!(config_duplicate_controllers.validate().is_ok());
+
+        // Test config with extreme tick_seconds values
+        let mut config_extreme_timing: Config = Config {
+            tick_seconds: 0,
+            ..Default::default()
+        };
+        // config_extreme_timing.tick_seconds = 0; // Zero interval
+        assert!(config_extreme_timing.validate().is_ok()); // Should be allowed
+
+        config_extreme_timing.tick_seconds = u16::MAX; // Maximum interval
+        assert!(config_extreme_timing.validate().is_ok());
+
+        // Test config with empty mappings but sensors present
+        let mut config_orphaned_sensors: Config = Config::default();
+        config_orphaned_sensors
+            .sensors
+            .extend(vec![SensorCfg::LmSensors {
+                id: "orphaned_sensor".to_string(),
+                chip: "test_chip".to_string(),
+                feature: "test_feature".to_string(),
+            }]);
+        config_orphaned_sensors.mappings = vec![]; // No mappings for the sensor
+        assert!(config_orphaned_sensors.validate().is_ok()); // Should be allowed
+    }
+
+    #[test]
+    fn config_manager_error_handling() {
+        use std::io::Write;
+
+        // Test loading invalid YAML
+        let invalid_yaml = "invalid: yaml: content: [unclosed";
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(invalid_yaml.as_bytes()).unwrap();
+        temp_file.flush().unwrap();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(ConfigManager::load(Some(temp_file.path().to_path_buf())));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to parse YAML")
+        );
+
+        // Test loading config with wrong version
+        let wrong_version_yaml = r#"
+version: 999
+tick_seconds: 5
+"#;
+        let mut temp_file2 = NamedTempFile::new().unwrap();
+        temp_file2.write_all(wrong_version_yaml.as_bytes()).unwrap();
+        temp_file2.flush().unwrap();
+
+        let result2 = rt.block_on(ConfigManager::load(Some(temp_file2.path().to_path_buf())));
+        assert!(result2.is_err());
+        let error_msg = result2.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("Unsupported config version")
+                || error_msg.contains("Failed to parse YAML")
+        );
+
+        // Test loading non-existent file
+        let result3 = rt.block_on(ConfigManager::load(Some(PathBuf::from(
+            "/non/existent/path.yml",
+        ))));
+        assert!(result3.is_err());
+        assert!(
+            result3
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to read config file")
+        );
+    }
+
+    #[test]
+    fn usb_selector_serialization() {
+        // Test UsbSelector with all fields
+        let usb_full = UsbSelector {
+            vid: 0x264a,
+            pid: 0x2330,
+            serial: Some("ABC123".to_string()),
+        };
+
+        let yaml = serde_yaml::to_string(&usb_full).unwrap();
+        let deserialized: UsbSelector = serde_yaml::from_str(&yaml).unwrap();
+
+        assert_eq!(deserialized.vid, 0x264a);
+        assert_eq!(deserialized.pid, 0x2330);
+        assert_eq!(deserialized.serial, Some("ABC123".to_string()));
+
+        // Test UsbSelector without serial
+        let usb_minimal = UsbSelector {
+            vid: 0x1234,
+            pid: 0x5678,
+            serial: None,
+        };
+
+        let yaml2 = serde_yaml::to_string(&usb_minimal).unwrap();
+        let deserialized2: UsbSelector = serde_yaml::from_str(&yaml2).unwrap();
+
+        assert_eq!(deserialized2.vid, 0x1234);
+        assert_eq!(deserialized2.pid, 0x5678);
+        assert_eq!(deserialized2.serial, None);
+    }
+
+    #[test]
+    fn color_cfg_edge_cases() {
+        // Test extreme RGB values
+        let color_black = ColorCfg {
+            color: "black".to_string(),
+            rgb: [0, 0, 0],
+        };
+
+        let color_white = ColorCfg {
+            color: "white".to_string(),
+            rgb: [255, 255, 255],
+        };
+
+        // Test serialization roundtrip
+        let yaml_black = serde_yaml::to_string(&color_black).unwrap();
+        let deserialized_black: ColorCfg = serde_yaml::from_str(&yaml_black).unwrap();
+        assert_eq!(deserialized_black.color, "black");
+        assert_eq!(deserialized_black.rgb, [0, 0, 0]);
+
+        let yaml_white = serde_yaml::to_string(&color_white).unwrap();
+        let deserialized_white: ColorCfg = serde_yaml::from_str(&yaml_white).unwrap();
+        assert_eq!(deserialized_white.color, "white");
+        assert_eq!(deserialized_white.rgb, [255, 255, 255]);
+    }
+
+    #[test]
+    fn fan_target_edge_cases() {
+        // Test extreme controller and fan indices
+        let target_min = FanTarget {
+            controller: 1,
+            fan_idx: 1,
+        };
+
+        let target_max = FanTarget {
+            controller: u8::MAX,
+            fan_idx: u8::MAX,
+        };
+
+        // Test serialization
+        let yaml_min = serde_yaml::to_string(&target_min).unwrap();
+        let deserialized_min: FanTarget = serde_yaml::from_str(&yaml_min).unwrap();
+        assert_eq!(deserialized_min.controller, 1);
+        assert_eq!(deserialized_min.fan_idx, 1);
+
+        let yaml_max = serde_yaml::to_string(&target_max).unwrap();
+        let deserialized_max: FanTarget = serde_yaml::from_str(&yaml_max).unwrap();
+        assert_eq!(deserialized_max.controller, u8::MAX);
+        assert_eq!(deserialized_max.fan_idx, u8::MAX);
     }
 }
