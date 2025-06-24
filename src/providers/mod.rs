@@ -48,9 +48,9 @@ mod integration_tests {
         let fan_color = FanColorControlServiceProvider::new(state.clone(), event_bus.clone());
 
         // Verify provider metadata
-        assert_eq!(monitoring.name(), "MonitoringService");
-        assert_eq!(broadcast.name(), "BroadcastService");
-        assert_eq!(fan_color.name(), "FanColorService");
+        std::assert_eq!(monitoring.name(), "MonitoringService");
+        std::assert_eq!(broadcast.name(), "BroadcastService");
+        std::assert_eq!(fan_color.name(), "FanColorService");
 
         // Verify priority ordering
         assert!(monitoring.priority() > fan_color.priority());
@@ -88,14 +88,14 @@ mod integration_tests {
         sorted_providers.sort_by_key(|(_, priority)| std::cmp::Reverse(*priority));
 
         // Verify correct order: Monitoring (10) > FanColor (4) > Broadcast (3)
-        assert_eq!(sorted_providers[0].0, "MonitoringService");
-        assert_eq!(sorted_providers[1].0, "FanColorService");
-        assert_eq!(sorted_providers[2].0, "BroadcastService");
+        std::assert_eq!(sorted_providers[0].0, "MonitoringService");
+        std::assert_eq!(sorted_providers[1].0, "FanColorService");
+        std::assert_eq!(sorted_providers[2].0, "BroadcastService");
 
         // Verify priorities
-        assert_eq!(sorted_providers[0].1, 10);
-        assert_eq!(sorted_providers[1].1, 4);
-        assert_eq!(sorted_providers[2].1, 3);
+        std::assert_eq!(sorted_providers[0].1, 10);
+        std::assert_eq!(sorted_providers[1].1, 4);
+        std::assert_eq!(sorted_providers[2].1, 3);
     }
 
     #[tokio::test]
@@ -117,8 +117,8 @@ mod integration_tests {
         let broadcast_bus = BroadcastServiceProvider::new(state.clone(), event_bus.clone());
 
         // All should have the same base properties
-        assert_eq!(monitoring_bus.name(), "MonitoringService");
-        assert_eq!(broadcast_bus.name(), "BroadcastService");
+        std::assert_eq!(monitoring_bus.name(), "MonitoringService");
+        std::assert_eq!(broadcast_bus.name(), "BroadcastService");
     }
 
     #[tokio::test]
@@ -249,15 +249,15 @@ mod integration_tests {
         let monitoring1 = MonitoringServiceProvider::new(state.clone(), event_bus.clone());
         let monitoring2 = MonitoringServiceProvider::new(state.clone(), event_bus.clone());
 
-        assert_eq!(monitoring1.name(), monitoring2.name());
-        assert_eq!(monitoring1.priority(), monitoring2.priority());
-        assert_eq!(monitoring1.is_critical(), monitoring2.is_critical());
+        std::assert_eq!(monitoring1.name(), monitoring2.name());
+        std::assert_eq!(monitoring1.priority(), monitoring2.priority());
+        std::assert_eq!(monitoring1.is_critical(), monitoring2.is_critical());
 
         let broadcast1 = BroadcastServiceProvider::new(state.clone(), event_bus.clone());
         let broadcast2 = BroadcastServiceProvider::new(state.clone(), event_bus.clone());
 
-        assert_eq!(broadcast1.name(), broadcast2.name());
-        assert_eq!(broadcast1.priority(), broadcast2.priority());
-        assert_eq!(broadcast1.is_critical(), broadcast2.is_critical());
+        std::assert_eq!(broadcast1.name(), broadcast2.name());
+        std::assert_eq!(broadcast1.priority(), broadcast2.priority());
+        std::assert_eq!(broadcast1.is_critical(), broadcast2.is_critical());
     }
 }

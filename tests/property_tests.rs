@@ -167,8 +167,8 @@ proptest! {
             sensors: vec![],
             mappings: vec![],
             active_curve_mappings: vec![],
-            colors: vec![],
-            color_mappings: vec![],
+            effects: vec![],
+            effect_mappings: vec![],
         };
 
         // Should not panic during validation
@@ -214,7 +214,7 @@ proptest! {
         let _debug_string = format!("{:?}", point);
 
         // Cloning should work
-        let _cloned = point.clone();
+        let _cloned = point;
     }
 }
 

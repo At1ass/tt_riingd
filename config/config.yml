@@ -13,64 +13,40 @@ controllers:
     fans:
       - idx: 1
         name: "GPU bottom"
-        active_curve: "GPUStepCurve"
-        curve: [ "GPUStepCurve", "GPUConstant" ]
       - idx: 2
         name: "CPU left"
-        active_curve: "CPUStepCurve"
-        curve: [ "CPUStepCurve", "CPUConstant" ]
       - idx: 3
         name: "CPU left"
-        active_curve: "CPUStepCurve"
-        curve: [ "CPUStepCurve", "CPUConstant" ]
   - id: "quad-2"
     kind: riing-quad
     usb: { vid: 0x264A, pid: 0x232C }
     fans:
       - idx: 1
         name: "CPU top"
-        active_curve: "CPUStepCurve"
-        curve: [ "CPUStepCurve", "CPUConstant" ]
       - idx: 2
         name: "CPU top"
-        active_curve: "CPUStepCurve"
-        curve: [ "CPUStepCurve", "CPUConstant" ]
       - idx: 3
         name: "CPU top"
-        active_curve: "CPUStepCurve"
-        curve: [ "CPUStepCurve", "CPUConstant" ]
   - id: "quad-3"
     kind: riing-quad
     usb: { vid: 0x264A, pid: 0x232D }
     fans:
       - idx: 1
         name: "CPU right"
-        active_curve: "CPUStepCurve"
-        curve: [ "CPUStepCurve", "CPUConstant" ]
       - idx: 2
         name: "CPU right"
-        active_curve: "CPUStepCurve"
-        curve: [ "CPUStepCurve", "CPUConstant" ]
       - idx: 3
         name: "GPU right"
-        active_curve: "GPUStepCurve"
-        curve: [ "GPUStepCurve", "GPUConstant" ]
   - id: "quad-4"
     kind: riing-quad
     usb: { vid: 0x264A, pid: 0x232E }
     fans:
       - idx: 1
         name: "GPU right"
-        active_curve: "GPUStepCurve"
-        curve: [ "GPUStepCurve", "GPUConstant" ]
       - idx: 2
         name: "GPU bottom"
-        active_curve: "GPUStepCurve"
-        curve: [ "GPUStepCurve", "GPUConstant" ]
       - idx: 3
         name: "GPU bottom"
-        active_curve: "GPUStepCurve"
-        curve: [ "GPUStepCurve", "GPUConstant" ]
 
 ################################################################################
 #  Curve library
@@ -91,6 +67,27 @@ curves:
     kind: constant
     speed: 60
 ################################################################################
+#  Curve mappings
+################################################################################
+active_curve_mappings:
+  - curve: "CPUStepCurve"
+    targets:
+      - { controller: 1, fan_idx: 2 }
+      - { controller: 1, fan_idx: 3 }
+      - { controller: 2, fan_idx: 1 }
+      - { controller: 2, fan_idx: 2 }
+      - { controller: 2, fan_idx: 3 }
+      - { controller: 3, fan_idx: 1 }
+      - { controller: 3, fan_idx: 2 }
+  - curve: "GPUStepCurve"
+    targets:
+      - { controller: 1, fan_idx: 1 }
+      - { controller: 3, fan_idx: 3 }
+      - { controller: 4, fan_idx: 1 }
+      - { controller: 4, fan_idx: 2 }
+      - { controller: 4, fan_idx: 3 }
+
+################################################################################
 #  Sensors settings
 ################################################################################
 sensors:
@@ -100,25 +97,26 @@ sensors:
     feature: "temp1"
 
   - id: "gpu_temp"
-    kind: lm-sensors
-    chip: "mt7921_phy0-pci-0d00"
-    feature: "temp1"
+    kind: nvidia
+    gpu_index: 0
 
 ################################################################################
 #  Colors
 ################################################################################
-colors:
-  - color: "red"
+effects:
+  - id: "rainbow"
+    kind: rainbow
+    duration: 20
+  - id: "static_red"
+    kind: constant-color
     rgb: [255, 0, 0]
-
-  - color: "green"
-    rgb: [0, 255, 0]
-
-  - color: "blue"
+  - id: "static_blue"
+    kind: constant-color
     rgb: [0, 0, 255]
-
-  - color: "yellow"
-    rgb: [255, 255, 0]
+  - id: "breate"
+    kind: breathing
+    color: [0, 255, 0]
+    duration: 10
 ################################################################################
 #  sensor <-> fan mapping
 ################################################################################
@@ -132,7 +130,6 @@ mappings:
       - { controller: 2, fan_idx: 3 }
       - { controller: 3, fan_idx: 1 }
       - { controller: 3, fan_idx: 2 }
-
   - sensor: "gpu_temp"
     targets:
       - { controller: 1, fan_idx: 1 }
@@ -143,8 +140,8 @@ mappings:
 ################################################################################
 #  color <-> fan mapping
 ################################################################################
-color_mappings:
-  - color: "yellow"
+effect_mappings:
+  - effect: "static_blue"
     targets:
       - { controller: 1, fan_idx: 1 }
       - { controller: 1, fan_idx: 2 }

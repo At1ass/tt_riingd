@@ -189,8 +189,8 @@ pub mod test_utils {
             sensors: vec![],
             mappings: vec![],
             active_curve_mappings: vec![],
-            colors: vec![],
-            color_mappings: vec![],
+            effects: vec![],
+            effect_mappings: vec![],
         }
     }
 
@@ -237,8 +237,8 @@ pub mod test_utils {
                     fan_idx: 1,
                 }],
             }],
-            colors: vec![],
-            color_mappings: vec![],
+            effects: vec![],
+            effect_mappings: vec![],
         }
     }
 
@@ -349,23 +349,23 @@ pub mod test_utils {
                     }],
                 },
             ],
-            colors: vec![
-                ColorCfg {
-                    color: "cool_blue".to_string(),
+            effects: vec![
+                EffectCfg::ConstantColor {
+                    id: "cool_blue".to_string(),
                     rgb: [0, 100, 255],
                 },
-                ColorCfg {
-                    color: "warm_orange".to_string(),
+                EffectCfg::ConstantColor {
+                    id: "warm_orange".to_string(),
                     rgb: [255, 150, 0],
                 },
-                ColorCfg {
-                    color: "danger_red".to_string(),
+                EffectCfg::ConstantColor {
+                    id: "danger_red".to_string(),
                     rgb: [255, 0, 0],
                 },
             ],
-            color_mappings: vec![
-                ColorMappingCfg {
-                    color: "cool_blue".to_string(),
+            effect_mappings: vec![
+                EffectMappingCfg {
+                    effect: "cool_blue".to_string(),
                     targets: vec![
                         FanTarget {
                             controller: 1,
@@ -377,8 +377,8 @@ pub mod test_utils {
                         },
                     ],
                 },
-                ColorMappingCfg {
-                    color: "warm_orange".to_string(),
+                EffectMappingCfg {
+                    effect: "warm_orange".to_string(),
                     targets: vec![FanTarget {
                         controller: 1,
                         fan_idx: 3,

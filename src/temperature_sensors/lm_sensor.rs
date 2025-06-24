@@ -17,6 +17,10 @@ struct Sensor {
     key: String,
     subf: SubFeatureRef<'static>,
 }
+
+// SAFETY: SubFeatureRef holds only immutable references to static data in lm-sensors library.
+// The lm-sensors library manages its own thread safety for read operations.
+// SubFeatureRef is essentially a pointer to static metadata that doesn't change after initialization.
 unsafe impl Send for Sensor {}
 unsafe impl Sync for Sensor {}
 
@@ -69,10 +73,7 @@ impl LmSensorSource {
         cfg.iter()
             .filter_map(|c| {
                 if let SensorCfg::LmSensors { id, chip, feature } = c {
-                    #[cfg(debug_assertions)]
-                    {
-                        debug!("Discovering LM sensor: chip={chip}, feature={feature}");
-                    }
+                    debug!("Discovering LM sensor: chip={chip}, feature={feature}");
                     let chip_ref = LMSENSORS
                         .as_ref()?
                         .0

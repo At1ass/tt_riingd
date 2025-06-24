@@ -59,53 +59,5 @@ impl SensorManager {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::temperature_sensors::sensor::TemperatureSensor;
-    use async_trait::async_trait;
-
-    struct MockSensor {
-        key: String,
-        temperature: f32,
-    }
-
-    #[async_trait]
-    impl TemperatureSensor for MockSensor {
-        async fn read_temperature(&self) -> Result<f32> {
-            Ok(self.temperature)
-        }
-
-        fn key(&self) -> String {
-            self.key.clone()
-        }
-    }
-
-    #[test]
-    fn test_sensor_manager_basic_operations() {
-        let sensors = vec![
-            Box::new(MockSensor {
-                key: "cpu_temp".to_string(),
-                temperature: 45.0,
-            }) as Box<dyn TemperatureSensor>,
-            Box::new(MockSensor {
-                key: "gpu_temp".to_string(),
-                temperature: 60.0,
-            }),
-        ];
-
-        let manager = SensorManager(Arc::new(sensors));
-
-        assert_eq!(manager.len(), 2);
-        assert!(!manager.is_empty());
-
-        let keys: Vec<String> = manager.iter().map(|s| s.key()).collect();
-        assert_eq!(keys, vec!["cpu_temp", "gpu_temp"]);
-
-        let cpu_sensor = manager.find_by_key("cpu_temp");
-        assert!(cpu_sensor.is_some());
-        assert_eq!(cpu_sensor.unwrap().key(), "cpu_temp");
-
-        let nonexistent = manager.find_by_key("nonexistent");
-        assert!(nonexistent.is_none());
-    }
-}
+#[path = "tests/sensor_manager_test.rs"]
+mod sensor_manager_test;

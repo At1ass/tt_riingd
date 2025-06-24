@@ -3,14 +3,15 @@ name = "tt_riingd"
 version = "1.0.0"
 edition = "2024"
 
-[features]
-tokio-console = []
+[[bin]]
+name = "tt_riingd"
+path = "src/bin/main.rs"
 
 [dependencies]
 # Async
 tokio = { version = "1.45.0", features = ["macros", "rt-multi-thread", "sync", "signal"] }
 tokio-stream = "0.1.17"
-console-subscriber = "0.4.1"
+async-stream = "0.3.0"
 
 # OS
 zbus = { version = "5.6.0", default-features = false, features = ["tokio"] }

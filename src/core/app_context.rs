@@ -7,7 +7,7 @@ use tokio::sync::RwLock;
 use crate::{
     config::{Config, ConfigManager},
     drivers::controller_manager,
-    mappings::{ColorMapping, CurveMapping, Mapping},
+    mappings::{CurveMapping, EffectMapping, EffectStore, Mapping},
     temperature_sensors::sensor_manager,
 };
 
@@ -17,6 +17,7 @@ use crate::{
 /// including hardware controllers, sensors, mappings, and runtime data.
 /// All fields are wrapped in appropriate synchronization primitives for
 /// safe concurrent access.
+#[derive(Clone)]
 pub struct AppState {
     /// Configuration manager for centralized config handling
     pub config_manager: Arc<ConfigManager>,
@@ -27,8 +28,9 @@ pub struct AppState {
     /// Sensor-to-fan mappings
     pub mapping: Arc<RwLock<Mapping>>,
     /// Color-to-fan mappings
-    #[allow(dead_code)] // Will be used for future RGB color control features
-    pub color_mappings: Arc<RwLock<ColorMapping>>,
+    pub effect_runners: Arc<RwLock<EffectStore>>,
+    // Will be used for future RGB color control features
+    pub effect_mappings: Arc<RwLock<EffectMapping>>,
     /// Active curve assignments for each fan - maps (controller_id, channel) to curve name
     pub active_curves: Arc<RwLock<CurveMapping>>,
     /// Runtime sensor data cache
@@ -53,8 +55,11 @@ impl AppState {
                     .map_err(|e| anyhow::anyhow!("Failed to initialize sensors: {}", e))?,
             )),
             mapping: Arc::new(RwLock::new(Mapping::load_mappings(&config.mappings))),
-            color_mappings: Arc::new(RwLock::new(ColorMapping::build_color_mapping(
-                &config.color_mappings,
+            effect_runners: Arc::new(RwLock::new(EffectStore::build_effect_store(
+                &config.effects,
+            ))),
+            effect_mappings: Arc::new(RwLock::new(EffectMapping::build_color_mapping(
+                &config.effect_mappings,
             ))),
             active_curves: Arc::new(RwLock::new(CurveMapping::load_mappings(
                 &config.active_curve_mappings,
@@ -76,17 +81,19 @@ impl AppState {
 
     pub async fn update_mappings(&self, config: &Config) -> anyhow::Result<()> {
         let new_mapping = Mapping::load_mappings(&config.mappings);
-        let new_clr_mappings = ColorMapping::build_color_mapping(&config.color_mappings);
+        let new_clr_mappings = EffectMapping::build_color_mapping(&config.effect_mappings);
         let new_active_curves = CurveMapping::load_mappings(&config.active_curve_mappings);
+        let new_effects = EffectStore::build_effect_store(&config.effects);
 
         let mut mapping = self.mapping.write().await;
-        *mapping = new_mapping;
-
-        let mut color_mappings = self.color_mappings.write().await;
-        *color_mappings = new_clr_mappings;
-
+        let mut color_mappings = self.effect_mappings.write().await;
         let mut active_curves = self.active_curves.write().await;
+        let mut effect_runners = self.effect_runners.write().await;
+
+        *mapping = new_mapping;
+        *color_mappings = new_clr_mappings;
         *active_curves = new_active_curves;
+        *effect_runners = new_effects;
 
         Ok(())
     }

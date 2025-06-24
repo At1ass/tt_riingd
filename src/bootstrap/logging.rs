@@ -1,23 +1,5 @@
-mod app_context;
-mod application;
-mod cli;
-mod config;
-mod coordinator;
-mod drivers;
-mod event;
-mod fan_curve;
-mod interface;
-mod mappings;
-mod providers;
-mod task_manager;
-mod temperature_sensors;
-
-use std::{fs::File, io::Write, path::PathBuf};
-
 use anyhow::{Result, anyhow};
-use application::Application;
-use clap::Parser;
-use daemonize::Daemonize;
+use std::io::Write;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -25,12 +7,12 @@ use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberI
 ///
 /// This writer integrates with the system syslog daemon, which is the standard
 /// approach for system daemons like tt_riingd.
-struct SyslogWriter {
+pub struct SyslogWriter {
     logger: syslog::Logger<syslog::LoggerBackend, syslog::Formatter3164>,
 }
 
 impl SyslogWriter {
-    fn new() -> Result<Self> {
+    pub fn new() -> Result<Self> {
         let formatter = syslog::Formatter3164 {
             facility: syslog::Facility::LOG_DAEMON,
             hostname: None,
@@ -88,8 +70,8 @@ impl Write for SyslogWriter {
 /// - TT_RIINGD_LOG_TARGET: "stdout", "syslog", or "file" (default: "syslog" for daemon)
 /// - TT_RIINGD_LOG_DIR: Directory for file logging (default: "/var/log")
 ///
-/// Returns a WorkerGuard that must be kept alive to ensure log flushing
-fn init_tracing(is_daemon: bool) -> Result<Option<WorkerGuard>> {
+/// Returns a WorkerGuard that must be kept alive to ensure log flushing.
+pub fn init_tracing(is_daemon: bool) -> Result<Option<WorkerGuard>> {
     let log_format =
         std::env::var("TT_RIINGD_LOG_FORMAT").unwrap_or_else(|_| "compact".to_string());
     let log_target = std::env::var("TT_RIINGD_LOG_TARGET").unwrap_or_else(|_| {
@@ -107,7 +89,7 @@ fn init_tracing(is_daemon: bool) -> Result<Option<WorkerGuard>> {
 
     let registry = tracing_subscriber::registry().with(env_filter);
 
-    match log_target.as_str() {
+    let guard = match log_target.as_str() {
         "syslog" => {
             // Syslog is the standard for daemons - use non-blocking for performance
             let syslog_writer = SyslogWriter::new()?;
@@ -124,7 +106,7 @@ fn init_tracing(is_daemon: bool) -> Result<Option<WorkerGuard>> {
                 )
                 .init();
 
-            Ok(Some(guard))
+            Some(guard)
         }
         "file" => {
             let log_dir =
@@ -155,7 +137,7 @@ fn init_tracing(is_daemon: bool) -> Result<Option<WorkerGuard>> {
                 }
             }
 
-            Ok(Some(guard))
+            Some(guard)
         }
         "stdout" => {
             let (non_blocking, guard) = tracing_appender::non_blocking(std::io::stdout());
@@ -195,74 +177,15 @@ fn init_tracing(is_daemon: bool) -> Result<Option<WorkerGuard>> {
                 }
             }
 
-            Ok(Some(guard))
+            Some(guard)
         }
-        _ => Err(anyhow!(
-            "Invalid log target: {}. Supported: stdout, syslog, file",
-            log_target
-        )),
-    }
-}
+        _ => {
+            return Err(anyhow!(
+                "Invalid log target: {}. Supported: stdout, syslog, file",
+                log_target
+            ));
+        }
+    };
 
-fn into_daemon(daemonize: bool) -> Result<()> {
-    daemonize
-        .then(|| {
-            File::create("/var/tmp/tt_riingd.log")
-                .and_then(|out| Ok((out.try_clone()?, out)))
-                .map_err(|e| anyhow!("{e}"))
-                .and_then(|(stderr, stdout)| {
-                    Daemonize::new()
-                        .pid_file("/tmp/tt_riingd.pid")
-                        .stdout(stdout)
-                        .stderr(stderr)
-                        .start()
-                        .map_err(|e| anyhow!("{e}"))
-                })
-        })
-        .map_or(Ok(()), |res| res)
-}
-
-#[tokio::main]
-async fn tokio_main(config_path: Option<PathBuf>) -> Result<()> {
-    #[cfg(feature = "tokio-console")]
-    {
-        console_subscriber::init();
-    }
-    let config_manager = config::ConfigManager::load(config_path).await?;
-    Application::builder()
-        .with_config_manager(config_manager)
-        .build()
-        .await?
-        .run()
-        .await?;
-
-    Ok(())
-}
-
-fn main() -> Result<()> {
-    let cli = cli::Cli::parse();
-
-    // Initialize daemon mode first
-    into_daemon(cli.daemonize)?;
-
-    // Initialize tracing and keep the guard alive
-    let _guard = init_tracing(cli.daemonize)?;
-
-    // Log successful initialization
-    tracing::info!("tt_riingd daemon starting up");
-    if cli.daemonize {
-        tracing::info!("Running in daemon mode with syslog logging");
-    }
-
-    // Run the main application
-    let result = tokio_main(cli.config);
-
-    // Log shutdown
-    match &result {
-        Ok(_) => tracing::info!("tt_riingd daemon shutting down normally"),
-        Err(e) => tracing::error!("tt_riingd daemon shutting down due to error: {}", e),
-    }
-
-    // Guard will be dropped here, ensuring logs are flushed
-    result
+    Ok(guard)
 }

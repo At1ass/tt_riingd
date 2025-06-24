@@ -39,24 +39,21 @@ type NvmlDeviceGetTemperatureFn =
     unsafe extern "C" fn(*mut NvmlDevice, c_int, *mut c_uint) -> c_int;
 type NvmlErrorStringFn = unsafe extern "C" fn(c_int) -> *const c_char;
 
-/// NVML library wrapper with dynamic loading capabilities.
+/// NVML library wrapper with safe symbol management.
 ///
-/// This structure safely wraps the NVML library and provides access to
-/// GPU temperature monitoring functions. The library is loaded dynamically
-/// to ensure compatibility on systems without NVIDIA GPUs.
-struct NvmlLibrary {
-    _lib: Library,
-    init: Symbol<'static, NvmlInitFn>,
-    shutdown: Symbol<'static, NvmlShutdownFn>,
-    device_get_count: Symbol<'static, NvmlDeviceGetCountFn>,
-    device_get_handle_by_index: Symbol<'static, NvmlDeviceGetHandleByIndexFn>,
-    device_get_name: Symbol<'static, NvmlDeviceGetNameFn>,
-    device_get_temperature: Symbol<'static, NvmlDeviceGetTemperatureFn>,
-    error_string: Symbol<'static, NvmlErrorStringFn>,
+/// Uses a two-phase approach: first loads library, then extracts function pointers
+/// for safe storage. This avoids self-referential struct issues while maintaining safety.
+pub struct NvmlLibrary {
+    _lib: Library, // ← Keeps library loaded
+    // Function pointers extracted from symbols - safe as long as _lib is alive
+    init: NvmlInitFn,
+    shutdown: NvmlShutdownFn,
+    device_get_count: NvmlDeviceGetCountFn,
+    device_get_handle_by_index: NvmlDeviceGetHandleByIndexFn,
+    device_get_name: NvmlDeviceGetNameFn,
+    device_get_temperature: NvmlDeviceGetTemperatureFn,
+    error_string: NvmlErrorStringFn,
 }
-
-unsafe impl Send for NvmlLibrary {}
-unsafe impl Sync for NvmlLibrary {}
 
 impl Drop for NvmlLibrary {
     fn drop(&mut self) {
@@ -72,8 +69,8 @@ impl Drop for NvmlLibrary {
 }
 
 impl NvmlLibrary {
-    /// Attempts to load the NVML library from common system locations.
-    fn load() -> Result<Self> {
+    /// Loads the NVML library dynamically at runtime.
+    pub fn load() -> Result<Self> {
         let lib_names = [
             "libnvidia-ml.so.1", // Most common
             "libnvidia-ml.so",   // Fallback
@@ -95,59 +92,52 @@ impl NvmlLibrary {
             }
         }
 
-        Err(anyhow!(
-            "Failed to load NVML library. Last error: {}",
-            last_error.unwrap()
-        ))
+        Err(last_error
+            .map(anyhow::Error::from)
+            .unwrap_or_else(|| anyhow!("Failed to load NVML library: No specific error available")))
     }
 
     /// Creates NvmlLibrary from a loaded Library instance.
     fn from_library(lib: Library) -> Result<Self> {
         unsafe {
-            let init: Symbol<NvmlInitFn> = lib
+            // Get symbols first, then extract function pointers
+            let init_symbol: Symbol<NvmlInitFn> = lib
                 .get(b"nvmlInit_v2\0")
                 .or_else(|_| lib.get(b"nvmlInit\0"))
                 .map_err(|e| anyhow!("nvmlInit function not found: {}", e))?;
+            let init = *init_symbol;
 
-            let shutdown: Symbol<NvmlShutdownFn> = lib
+            let shutdown_symbol: Symbol<NvmlShutdownFn> = lib
                 .get(b"nvmlShutdown\0")
                 .map_err(|e| anyhow!("nvmlShutdown function not found: {}", e))?;
+            let shutdown = *shutdown_symbol;
 
-            let device_get_count: Symbol<NvmlDeviceGetCountFn> = lib
+            let device_get_count_symbol: Symbol<NvmlDeviceGetCountFn> = lib
                 .get(b"nvmlDeviceGetCount_v2\0")
                 .or_else(|_| lib.get(b"nvmlDeviceGetCount\0"))
                 .map_err(|e| anyhow!("nvmlDeviceGetCount function not found: {}", e))?;
+            let device_get_count = *device_get_count_symbol;
 
-            let device_get_handle_by_index: Symbol<NvmlDeviceGetHandleByIndexFn> = lib
+            let device_get_handle_by_index_symbol: Symbol<NvmlDeviceGetHandleByIndexFn> = lib
                 .get(b"nvmlDeviceGetHandleByIndex_v2\0")
                 .or_else(|_| lib.get(b"nvmlDeviceGetHandleByIndex\0"))
                 .map_err(|e| anyhow!("nvmlDeviceGetHandleByIndex function not found: {}", e))?;
+            let device_get_handle_by_index = *device_get_handle_by_index_symbol;
 
-            let device_get_name: Symbol<NvmlDeviceGetNameFn> = lib
+            let device_get_name_symbol: Symbol<NvmlDeviceGetNameFn> = lib
                 .get(b"nvmlDeviceGetName\0")
                 .map_err(|e| anyhow!("nvmlDeviceGetName function not found: {}", e))?;
+            let device_get_name = *device_get_name_symbol;
 
-            let device_get_temperature: Symbol<NvmlDeviceGetTemperatureFn> = lib
+            let device_get_temperature_symbol: Symbol<NvmlDeviceGetTemperatureFn> = lib
                 .get(b"nvmlDeviceGetTemperature\0")
                 .map_err(|e| anyhow!("nvmlDeviceGetTemperature function not found: {}", e))?;
+            let device_get_temperature = *device_get_temperature_symbol;
 
-            let error_string: Symbol<NvmlErrorStringFn> = lib
+            let error_string_symbol: Symbol<NvmlErrorStringFn> = lib
                 .get(b"nvmlErrorString\0")
                 .map_err(|e| anyhow!("nvmlErrorString function not found: {}", e))?;
-
-            // Convert to static lifetime for storing in static context
-            let init: Symbol<'static, NvmlInitFn> = std::mem::transmute(init);
-            let shutdown: Symbol<'static, NvmlShutdownFn> = std::mem::transmute(shutdown);
-            let device_get_count: Symbol<'static, NvmlDeviceGetCountFn> =
-                std::mem::transmute(device_get_count);
-            let device_get_handle_by_index: Symbol<'static, NvmlDeviceGetHandleByIndexFn> =
-                std::mem::transmute(device_get_handle_by_index);
-            let device_get_name: Symbol<'static, NvmlDeviceGetNameFn> =
-                std::mem::transmute(device_get_name);
-            let device_get_temperature: Symbol<'static, NvmlDeviceGetTemperatureFn> =
-                std::mem::transmute(device_get_temperature);
-            let error_string: Symbol<'static, NvmlErrorStringFn> =
-                std::mem::transmute(error_string);
+            let error_string = *error_string_symbol;
 
             Ok(Self {
                 _lib: lib,
@@ -174,8 +164,8 @@ impl NvmlLibrary {
         }
     }
 
-    /// Initializes NVML.
-    fn init(&self) -> Result<()> {
+    /// Initializes NVML - must be called before using NVML functions.
+    pub fn init(&self) -> Result<()> {
         unsafe {
             let result = (self.init)();
             if result == NVML_SUCCESS || result == NVML_ERROR_ALREADY_INITIALIZED {
@@ -270,8 +260,16 @@ struct GpuInfo {
 
 /// Global NVML instance.
 ///
-/// Initialized once at startup and shared across all NVIDIA sensor instances.
-/// Uses LazyLock for thread-safe lazy initialization.
+/// Uses LazyLock for thread-safe lazy initialization - NVML is loaded only when first needed.
+/// This is appropriate for NVML because:
+/// 1. NVML is a singleton by design (one instance per process)
+/// 2. Lazy loading avoids overhead on systems without NVIDIA GPUs
+/// 3. The library needs to stay loaded for the entire application lifetime
+/// 4. Thread-safe access is required for multiple sensor instances
+///
+/// Alternative architectures (DI via AppState) could be considered for better testability,
+/// but the current approach follows established NVIDIA ecosystem patterns.
+///
 /// Returns None if NVML is not available on the system.
 static NVML: LazyLock<Option<Arc<Mutex<NvmlLibrary>>>> =
     LazyLock::new(|| match NvmlLibrary::load() {
@@ -435,57 +433,5 @@ impl TemperatureSensor for NvidiaSensor {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_nvml_library_loading() {
-        // This test will only pass on systems with NVIDIA drivers
-        // On other systems, it should gracefully fail
-        match NvmlLibrary::load() {
-            Ok(nvml) => {
-                println!("NVML library loaded successfully");
-                match nvml.init() {
-                    Ok(()) => println!("NVML initialized successfully"),
-                    Err(e) => println!("NVML initialization failed: {}", e),
-                }
-            }
-            Err(e) => {
-                println!("NVML library not available: {}", e);
-                // This is expected on systems without NVIDIA GPUs
-            }
-        }
-    }
-
-    #[test]
-    fn test_nvidia_sensor_discovery() {
-        let config = vec![]; // Empty config for auto-discovery
-        let sensors = NvidiaSensor::discover(&config);
-
-        // On systems with NVIDIA GPUs, this should return sensors
-        // On systems without, this should return an empty vector
-        println!("Discovered {} NVIDIA sensors", sensors.len());
-
-        for sensor in &sensors {
-            println!("Sensor key: {}", sensor.key());
-        }
-    }
-
-    #[tokio::test]
-    async fn test_nvidia_sensor_reading() {
-        let config = vec![];
-        let sensors = NvidiaSensor::discover(&config);
-
-        for sensor in sensors {
-            match sensor.read_temperature().await {
-                Ok(temp) => {
-                    println!("GPU {} temperature: {}°C", sensor.key(), temp);
-                    assert!(temp > 0.0 && temp < 150.0); // Reasonable temperature range
-                }
-                Err(e) => {
-                    println!("Failed to read temperature from {}: {}", sensor.key(), e);
-                }
-            }
-        }
-    }
-}
+#[path = "tests/nvidia_test.rs"]
+mod nvidia_test;

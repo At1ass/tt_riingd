@@ -132,6 +132,13 @@ impl ControllerManager {
             .await
     }
 
+    pub async fn update_channel_batch(
+        &self,
+        controller: u8,
+        batch: Vec<(usize, f32, u8)>,
+    ) -> Result<()> {
+        self.get_device(controller)?.update_speed_batch(batch).await
+    }
     /// Updates RGB color for a specific fan channel.
     ///
     /// # Arguments
@@ -158,6 +165,13 @@ impl ControllerManager {
             .await
     }
 
+    pub async fn update_channel_color_batch(
+        &self,
+        controller: u8,
+        batch: Vec<(usize, u8, u8, u8)>,
+    ) -> Result<()> {
+        self.get_device(controller)?.update_color_batch(batch).await
+    }
     /// Gets the firmware version of a specific controller.
     ///
     /// # Arguments

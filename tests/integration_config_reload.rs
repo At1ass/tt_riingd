@@ -206,8 +206,8 @@ async fn test_complex_configuration_validation() -> Result<()> {
     assert_eq!(config.active_curve_mappings.len(), 3);
 
     // Verify colors and color mappings
-    assert_eq!(config.colors.len(), 3);
-    assert_eq!(config.color_mappings.len(), 2);
+    assert_eq!(config.effects.len(), 3);
+    assert_eq!(config.effect_mappings.len(), 2);
 
     Ok(())
 }

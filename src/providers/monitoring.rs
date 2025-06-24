@@ -148,6 +148,7 @@ async fn collect_and_process_temperatures(
     let mut temperatures = HashMap::new();
 
     let sensors = state.sensors.read().await;
+    let mut batch_data: HashMap<u8, Vec<_>> = HashMap::new();
     for sensor in sensors.iter() {
         match sensor.read_temperature().await {
             Ok(temp) => {
@@ -166,21 +167,25 @@ async fn collect_and_process_temperatures(
                         .await
                         .context("Failed to calculate fan speed")?;
 
-                    if let Err(e) = state
-                        .controllers
-                        .read()
-                        .await
-                        .update_channel(controller_id, channel, temp, speed)
-                        .await
-                    {
-                        error!("Failed to update controller: {e}");
-                    }
+                    batch_data.entry(controller_id).or_default().push((
+                        channel as usize,
+                        temp,
+                        speed,
+                    ));
                 }
             }
             Err(e) => {
                 error!("Failed to read temperature from sensor: {e}");
             }
         }
+    }
+
+    let controllers = state.controllers.read().await;
+    for (controller_id, data) in batch_data {
+        controllers
+            .update_channel_batch(controller_id, data)
+            .await
+            .context(format!("Failed to update controller {controller_id}"))?;
     }
 
     *state.sensor_data.write().await = temperatures.clone();
@@ -193,249 +198,5 @@ async fn collect_and_process_temperatures(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        config::{Config, FanTarget, MappingCfg, SensorCfg},
-        drivers::controller_manager::ControllerManager,
-        mappings::{ColorMapping, CurveMapping, Mapping},
-        temperature_sensors::{sensor::TemperatureSensor, sensor_manager},
-    };
-    use std::sync::Mutex;
-    use std::sync::atomic::{AtomicU32, Ordering};
-    use tokio::{
-        sync::RwLock,
-        time::{sleep, timeout},
-    };
-
-    // Mock sensor implementation for testing
-    #[derive(Debug)]
-    struct MockTemperatureSensor {
-        key: String,
-        temperature: Arc<Mutex<f32>>,
-        read_count: Arc<AtomicU32>,
-        should_fail: Arc<Mutex<bool>>,
-    }
-
-    impl MockTemperatureSensor {
-        fn new(key: &str, initial_temp: f32) -> Self {
-            Self {
-                key: key.to_string(),
-                temperature: Arc::new(Mutex::new(initial_temp)),
-                read_count: Arc::new(AtomicU32::new(0)),
-                should_fail: Arc::new(Mutex::new(false)),
-            }
-        }
-
-        #[allow(dead_code)]
-        fn set_temperature(&self, temp: f32) {
-            *self.temperature.lock().unwrap() = temp;
-        }
-
-        #[allow(dead_code)]
-        fn get_read_count(&self) -> u32 {
-            self.read_count.load(Ordering::Relaxed)
-        }
-    }
-
-    #[async_trait]
-    impl TemperatureSensor for MockTemperatureSensor {
-        fn key(&self) -> String {
-            self.key.clone()
-        }
-
-        async fn read_temperature(&self) -> Result<f32> {
-            self.read_count.fetch_add(1, Ordering::Relaxed);
-
-            if *self.should_fail.lock().unwrap() {
-                return Err(anyhow::anyhow!("Mock sensor failure"));
-            }
-
-            Ok(*self.temperature.lock().unwrap())
-        }
-    }
-
-    // Helper function to create ConfigManager for tests
-    fn create_test_config_manager(config: Config) -> crate::config::ConfigManager {
-        crate::config::ConfigManager::new(config, std::path::PathBuf::from("/tmp/test.yml"))
-    }
-
-    // Helper function to create mock AppState with minimal Controllers
-    async fn create_mock_app_state() -> Arc<AppState> {
-        let config = Config {
-            sensors: vec![SensorCfg::LmSensors {
-                id: "cpu_temp".to_string(),
-                chip: "test_chip".to_string(),
-                feature: "test_feature".to_string(),
-            }],
-            mappings: vec![MappingCfg {
-                sensor: "cpu_temp".to_string(),
-                targets: vec![
-                    FanTarget {
-                        controller: 1,
-                        fan_idx: 1,
-                    },
-                    FanTarget {
-                        controller: 1,
-                        fan_idx: 2,
-                    },
-                ],
-            }],
-            ..Default::default()
-        };
-
-        let config_manager = create_test_config_manager(config);
-        Arc::new(AppState::new(config_manager).await.unwrap())
-    }
-
-    #[tokio::test]
-    async fn monitoring_service_updates_controllers() {
-        let state = create_mock_app_state().await;
-        let event_bus = EventBus::new();
-        let mut task_manager = TaskManager::new();
-
-        let provider = MonitoringServiceProvider::new(state.clone(), event_bus);
-        provider.start(&mut task_manager).await.unwrap();
-
-        // Wait for service to process sensors
-        sleep(Duration::from_millis(200)).await;
-
-        // Check that controller updates were called
-        // Note: This would require more sophisticated mocking to verify
-        // For now, we verify that the service runs without errors
-        assert!(task_manager.is_running("MonitoringService"));
-
-        // Cleanup
-        task_manager.shutdown_all().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn monitoring_service_responds_to_cancellation() {
-        let state = create_mock_app_state().await;
-        let event_bus = EventBus::new();
-        let mut task_manager = TaskManager::new();
-
-        let provider = MonitoringServiceProvider::new(state, event_bus);
-        provider.start(&mut task_manager).await.unwrap();
-
-        // Verify service is running
-        assert!(task_manager.is_running("MonitoringService"));
-
-        // Request shutdown
-        let shutdown_result = task_manager.shutdown_all().await;
-        assert!(shutdown_result.is_ok());
-
-        // Verify service stopped
-        assert_eq!(task_manager.active_count(), 0);
-    }
-
-    #[tokio::test]
-    async fn monitoring_service_multiple_sensors() {
-        let config = Config {
-            sensors: vec![
-                SensorCfg::LmSensors {
-                    id: "cpu_temp".to_string(),
-                    chip: "test_chip".to_string(),
-                    feature: "test_feature".to_string(),
-                },
-                SensorCfg::LmSensors {
-                    id: "gpu_temp".to_string(),
-                    chip: "test_chip2".to_string(),
-                    feature: "test_feature2".to_string(),
-                },
-            ],
-            mappings: vec![
-                MappingCfg {
-                    sensor: "cpu_temp".to_string(),
-                    targets: vec![FanTarget {
-                        controller: 1,
-                        fan_idx: 1,
-                    }],
-                },
-                MappingCfg {
-                    sensor: "gpu_temp".to_string(),
-                    targets: vec![FanTarget {
-                        controller: 1,
-                        fan_idx: 2,
-                    }],
-                },
-            ],
-            ..Default::default()
-        };
-
-        let sensors: Vec<Box<dyn TemperatureSensor>> = vec![
-            Box::new(MockTemperatureSensor::new("cpu_temp", 45.5)),
-            Box::new(MockTemperatureSensor::new("gpu_temp", 62.3)),
-        ];
-
-        let controllers = ControllerManager::init_from_cfg(&config)
-            .unwrap_or_else(|_| ControllerManager::empty());
-
-        // Create AppState with our mock sensors wrapped in SensorManager
-        let sensor_manager = sensor_manager::SensorManager::new_from_sensors(sensors);
-        let config_manager = create_test_config_manager(config.clone());
-        let state = Arc::new(AppState {
-            config_manager: Arc::new(config_manager),
-            controllers: Arc::new(tokio::sync::RwLock::new(controllers)),
-            sensors: Arc::new(tokio::sync::RwLock::new(sensor_manager)),
-            mapping: Arc::new(RwLock::new(Mapping::load_mappings(&[]))),
-            active_curves: Arc::new(RwLock::new(CurveMapping::load_mappings(&[]))),
-            sensor_data: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-            color_mappings: Arc::new(RwLock::new(ColorMapping::build_color_mapping(&[]))),
-        });
-
-        let event_bus = EventBus::new();
-        let mut receiver = event_bus.subscribe();
-        let mut task_manager = TaskManager::new();
-
-        let provider = MonitoringServiceProvider::new(state, event_bus);
-        provider.start(&mut task_manager).await.unwrap();
-
-        // Wait for temperature event
-        let event = timeout(Duration::from_secs(3), receiver.recv()).await;
-        assert!(event.is_ok());
-
-        match event.unwrap().unwrap() {
-            Event::TemperatureChanged(temperatures) => {
-                assert_eq!(temperatures.len(), 2);
-                assert!(temperatures.contains_key("cpu_temp"));
-                assert!(temperatures.contains_key("gpu_temp"));
-                assert_eq!(temperatures["cpu_temp"], 45.5);
-                assert_eq!(temperatures["gpu_temp"], 62.3);
-            }
-            _ => panic!("Expected TemperatureChanged event"),
-        }
-
-        // Cleanup
-        task_manager.shutdown_all().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn monitoring_service_timing_configuration() {
-        let config = Config {
-            tick_seconds: 1, // 1 second intervals
-            ..Default::default()
-        };
-
-        let _controllers = ControllerManager::init_from_cfg(&config)
-            .unwrap_or_else(|_| ControllerManager::empty());
-
-        let config_manager = create_test_config_manager(config);
-        let state = Arc::new(AppState::new(config_manager).await.unwrap());
-
-        let event_bus = EventBus::new();
-        let mut task_manager = TaskManager::new();
-
-        let provider = MonitoringServiceProvider::new(state, event_bus);
-        let result = provider.start(&mut task_manager).await;
-
-        assert!(result.is_ok());
-
-        // Service should start and run with custom timing
-        sleep(Duration::from_millis(100)).await;
-        assert!(task_manager.is_running("MonitoringService"));
-
-        // Cleanup
-        task_manager.shutdown_all().await.unwrap();
-    }
-}
+#[path = "tests/monitoring_test.rs"]
+mod monitoring_test;
