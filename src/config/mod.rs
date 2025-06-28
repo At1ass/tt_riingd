@@ -5,7 +5,6 @@ pub mod mappings;
 #[cfg(test)]
 pub mod tests;
 
-// Re-export commonly used items for backward compatibility
 pub use crate::core::event::ConfigChangeType;
 pub use cfg::{
     Config, ConfigManager, ControllerCfg, CurveCfg, CurveMappingCfg, EffectCfg, EffectMappingCfg,

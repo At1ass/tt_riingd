@@ -186,7 +186,6 @@ async fn run_config_watcher_service(
                             is_exact_match || is_filename_match
                         });
 
-                        // Only react to events that indicate actual file modifications or creation
                         let is_relevant_event = event.kind.is_modify() || event.kind.is_create();
 
                         if affects_config && is_relevant_event {

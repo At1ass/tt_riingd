@@ -84,8 +84,7 @@ impl DBusInterface {
                     }
                     ConfigChangeType::ColdRestart { changed_sections } => {
                         format!(
-                            "Hardware configuration changes detected in sections: {:?}. Daemon restart required: 'sudo systemctl restart tt_riingd'",
-                            changed_sections
+                            "Hardware configuration changes detected in sections: {changed_sections:?}. Daemon restart required: 'sudo systemctl restart tt_riingd'"
                         )
                     }
                 };

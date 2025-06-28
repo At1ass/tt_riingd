@@ -9,7 +9,6 @@ use crate::{
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::time::{sleep, timeout};
 
-// Helper function to create mock AppState with color configuration
 async fn create_mock_app_state_with_colors() -> Arc<AppState> {
     let config = Config {
         effect_mappings: vec![EffectMappingCfg {
@@ -155,11 +154,11 @@ async fn fan_color_service_responds_to_temperature_events() {
             // Expected color change response
         }
         Ok(Ok(other_event)) => {
-            println!("Received other event: {:?}", other_event);
+            println!("Received other event: {other_event:?}");
             // Accept any event as service is running
         }
         Ok(Err(e)) => {
-            println!("Event bus error: {}", e);
+            println!("Event bus error: {e}");
             // Service might be running but no events published yet
         }
         Err(_) => {
@@ -366,7 +365,7 @@ async fn fan_color_service_error_resilience() {
             // Service started successfully
         }
         Err(e) => {
-            println!("Service failed to start: {:?}", e);
+            println!("Service failed to start: {e:?}");
             // In test environment, service might fail to start due to missing dependencies
             // This is acceptable as long as we're testing error resilience
         }
@@ -396,7 +395,7 @@ async fn fan_color_service_error_resilience() {
             // Event published successfully
         }
         Err(e) => {
-            println!("Failed to publish event: {:?}", e);
+            println!("Failed to publish event: {e:?}");
             // This is acceptable in test environment
         }
     }

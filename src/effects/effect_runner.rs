@@ -57,7 +57,6 @@ impl EffectRunner {
             loop {
                 let t = (start.elapsed().as_secs_f32() / period.as_secs_f32()) % 1.0;
                 let phase = (t * std::f32::consts::TAU).sin();
-                // sin(phase) ∈ [-1,1]  →  [0,1]
                 let br = min + (max - min) * (phase + 1.0) * 0.5;
                 yield scale_rgb(rgb, br);
             }

@@ -625,7 +625,7 @@ mod benchmarks {
         }
 
         let duration = start.elapsed();
-        println!("Bezier calculation for 100 temps: {:?}", duration);
+        println!("Bezier calculation for 100 temps: {duration:?}");
 
         // Should complete reasonably fast
         assert!(duration.as_millis() < 100);
@@ -646,7 +646,7 @@ mod benchmarks {
         }
 
         let duration = start.elapsed();
-        println!("Config serialization 1000x: {:?}", duration);
+        println!("Config serialization 1000x: {duration:?}");
 
         // Should complete reasonably fast
         assert!(duration.as_millis() < 1000);

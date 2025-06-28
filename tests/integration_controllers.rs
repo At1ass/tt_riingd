@@ -73,8 +73,7 @@ async fn test_controller_communication_errors() -> Result<()> {
         .expect_err("Initialization should fail");
     assert!(
         init_error.to_string().contains("USB device not found"),
-        "Error should indicate USB device issue, got: {}",
-        init_error
+        "Error should indicate USB device issue, got: {init_error}"
     );
 
     // Test Case 2: Firmware version query failure
@@ -90,8 +89,7 @@ async fn test_controller_communication_errors() -> Result<()> {
         .expect_err("Firmware version query should fail");
     assert!(
         version_error.to_string().contains("Communication timeout"),
-        "Error should indicate timeout, got: {}",
-        version_error
+        "Error should indicate timeout, got: {version_error}"
     );
 
     // Test Case 3: Channel update failure
@@ -107,8 +105,7 @@ async fn test_controller_communication_errors() -> Result<()> {
         .expect_err("Channel update should fail");
     assert!(
         update_error.to_string().contains("Hardware error"),
-        "Error should indicate hardware issue, got: {}",
-        update_error
+        "Error should indicate hardware issue, got: {update_error}"
     );
 
     println!("✓ Controller communication error scenarios validated");
@@ -143,7 +140,7 @@ async fn test_multi_channel_fan_control() -> Result<()> {
         mock_controller
             .update_channel(channel, temp, speed)
             .await
-            .with_context(|| format!("Channel {} update should succeed", channel))?;
+            .with_context(|| format!("Channel {channel} update should succeed"))?;
     }
 
     println!("✓ Multi-channel fan control operations completed");
@@ -223,7 +220,7 @@ async fn test_controller_configuration_validation() -> Result<()> {
             fans: (1..=8)
                 .map(|i| FanCfg {
                     idx: i,
-                    name: format!("Fan {}", i),
+                    name: format!("Fan {i}"),
                 })
                 .collect(),
         },
@@ -272,13 +269,11 @@ async fn test_controller_event_integration() -> Result<()> {
         match expected_count {
             1 => assert!(
                 matches!(received_event, Event::ConfigChangeDetected(_)),
-                "First event should be ConfigChangeDetected, got {:?}",
-                received_event
+                "First event should be ConfigChangeDetected, got {received_event:?}"
             ),
             2 => assert!(
                 matches!(received_event, Event::SystemShutdown),
-                "Second event should be SystemShutdown, got {:?}",
-                received_event
+                "Second event should be SystemShutdown, got {received_event:?}"
             ),
             _ => unreachable!(),
         }
@@ -313,7 +308,7 @@ async fn test_controller_performance() -> Result<()> {
         mock_controller
             .update_channel(channel, temp, speed)
             .await
-            .with_context(|| format!("Update {} should succeed", i))?;
+            .with_context(|| format!("Update {i} should succeed"))?;
     }
 
     let elapsed = start_time.elapsed();
@@ -321,21 +316,16 @@ async fn test_controller_performance() -> Result<()> {
     // Assert: Performance should be reasonable
     assert!(
         elapsed < Duration::from_secs(1),
-        "100 updates should complete in under 1 second, took {:?}",
-        elapsed
+        "100 updates should complete in under 1 second, took {elapsed:?}"
     );
 
     let updates_per_second = 100.0 / elapsed.as_secs_f64();
     assert!(
         updates_per_second > 100.0,
-        "Should achieve >100 updates/sec, got {:.1}",
-        updates_per_second
+        "Should achieve >100 updates/sec, got {updates_per_second:.1}"
     );
 
-    println!(
-        "✓ Controller performance: {:.0} updates/sec",
-        updates_per_second
-    );
+    println!("✓ Controller performance: {updates_per_second:.0} updates/sec",);
     Ok(())
 }
 
@@ -362,7 +352,7 @@ async fn test_controller_resource_cleanup() -> Result<()> {
         mock_controller
             .send_init()
             .await
-            .with_context(|| format!("Controller {} initialization should succeed", i))?;
+            .with_context(|| format!("Controller {i} initialization should succeed"))?;
 
         controllers.push(mock_controller);
     }
@@ -399,10 +389,7 @@ async fn test_controller_firmware_versions() -> Result<()> {
             .returning(move || Ok((major, minor, patch)));
 
         let version = mock_controller.firmware_version().await.with_context(|| {
-            format!(
-                "Firmware version query for {}.{}.{} should succeed",
-                major, minor, patch
-            )
+            format!("Firmware version query for {major}.{minor}.{patch} should succeed")
         })?;
 
         assert_eq!(
@@ -443,8 +430,7 @@ async fn test_controller_error_recovery() -> Result<()> {
     let first_error = first_result.expect_err("First call should fail");
     assert!(
         first_error.to_string().contains("Temporary USB error"),
-        "Error should indicate USB issue, got: {}",
-        first_error
+        "Error should indicate USB issue, got: {first_error}"
     );
 
     // Second call should succeed (recovery)
@@ -482,8 +468,7 @@ async fn test_controller_error_recovery() -> Result<()> {
     let failure_error = failure_result.expect_err("Update should fail requiring reset");
     assert!(
         failure_error.to_string().contains("Device reset required"),
-        "Error should indicate reset needed, got: {}",
-        failure_error
+        "Error should indicate reset needed, got: {failure_error}"
     );
 
     // Simulate reset

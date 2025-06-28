@@ -69,7 +69,6 @@ pub use bootstrap::{cli, daemon, logging, runtime};
 #[cfg(test)]
 pub use test_utils::*;
 
-// Development and testing utilities
 #[cfg(test)]
 mod test_utils {
     //! Common test utilities used across the codebase
@@ -90,7 +89,6 @@ mod test_utils {
     pub async fn create_test_config_manager(config: Config) -> anyhow::Result<ConfigManager> {
         let temp_file = create_temp_config(&config)?;
         let config_manager = ConfigManager::load(Some(temp_file.path().to_path_buf())).await?;
-        // Keep temp_file alive by forgetting it (for test purposes only)
         std::mem::forget(temp_file);
         Ok(config_manager)
     }

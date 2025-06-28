@@ -78,9 +78,7 @@ impl TaskManager {
 
         for handle in handles {
             match tokio::time::timeout(Duration::from_secs(10), handle).await {
-                Ok(Ok(Ok(()))) => {
-                    // Task completed successfully
-                }
+                Ok(Ok(Ok(()))) => {}
                 Ok(Ok(Err(e))) => {
                     warn!("Task failed during shutdown: {}", e);
                     if first_error.is_none() {
@@ -137,6 +135,6 @@ impl Default for TaskManager {
 
 struct TaskInfo {
     handle: JoinHandle<Result<()>>,
-    #[allow(dead_code)] // May be used for future task cancellation functionality
+    #[allow(dead_code)]
     cancel_token: CancellationToken,
 }

@@ -4,7 +4,6 @@
 //! and temperature control points. These structures are used throughout the system
 //! for converting temperature readings into appropriate fan speeds.
 
-// No additional imports needed
 use serde::{Deserialize, Serialize};
 
 use crate::config::cfg::CurveCfg;

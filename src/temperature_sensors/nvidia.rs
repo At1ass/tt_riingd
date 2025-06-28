@@ -157,7 +157,7 @@ impl NvmlLibrary {
         unsafe {
             let ptr = (self.error_string)(result);
             if ptr.is_null() {
-                format!("Unknown NVML error: {}", result)
+                format!("Unknown NVML error: {result}")
             } else {
                 CStr::from_ptr(ptr).to_string_lossy().into_owned()
             }
@@ -343,7 +343,7 @@ impl NvidiaSensor {
             // No specific configuration, discover all GPUs
             for i in 0..device_count {
                 if let Ok(sensor) =
-                    Self::create_sensor_for_gpu(&nvml, i, &format!("nvidia_gpu_{}", i))
+                    Self::create_sensor_for_gpu(&nvml, i, &format!("nvidia_gpu_{i}"))
                 {
                     sensors.push(sensor);
                 }

@@ -96,14 +96,14 @@ async fn test_config_file_change_detection() {
             Ok(AppEvent::ConfigChangeDetected(_)) => {
                 // Test passed - we received the expected event
             }
-            other => panic!("Expected ConfigChangeDetected event, got: {:?}", other),
+            other => panic!("Expected ConfigChangeDetected event, got: {other:?}"),
         }
     } else {
         match event_result.unwrap() {
             Ok(AppEvent::ConfigChangeDetected(_)) => {
                 // Test passed - we received the expected event
             }
-            other => panic!("Expected ConfigChangeDetected event, got: {:?}", other),
+            other => panic!("Expected ConfigChangeDetected event, got: {other:?}"),
         }
     }
 
@@ -150,7 +150,7 @@ async fn test_debouncing_with_modern_patterns() {
 
     // Make rapid file changes
     for i in 0..5 {
-        std::fs::write(&config_path, format!("# Change {}\nversion: 1\nfans: []\ncontrollers: []\nmappings: []\ncolor_mappings: []\n", i)).unwrap();
+        std::fs::write(&config_path, format!("# Change {i}\nversion: 1\nfans: []\ncontrollers: []\nmappings: []\ncolor_mappings: []\n")).unwrap();
         sleep(Duration::from_millis(50)).await; // Very rapid changes
     }
 
@@ -168,8 +168,7 @@ async fn test_debouncing_with_modern_patterns() {
     // Due to debouncing (500ms), we shouldn't get an event for every change
     assert!(
         event_count <= 2,
-        "Received {} events, expected <= 2 due to debouncing",
-        event_count
+        "Received {event_count} events, expected <= 2 due to debouncing",
     );
 
     let _ = task_manager.shutdown_all().await;

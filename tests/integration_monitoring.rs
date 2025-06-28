@@ -81,10 +81,7 @@ async fn test_step_curve_monitoring() -> Result<()> {
         // Allow small tolerance for floating point arithmetic
         assert!(
             (calculated_speed as i32 - expected_speed).abs() <= 2,
-            "Temperature {}: expected ~{}, got {}",
-            temp,
-            expected_speed,
-            calculated_speed
+            "Temperature {temp}: expected ~{expected_speed}, got {calculated_speed}"
         );
     }
 
@@ -198,8 +195,7 @@ async fn test_event_system_integration() -> Result<()> {
 
     assert!(
         matches!(received_event, Event::SystemShutdown),
-        "Expected SystemShutdown event, got {:?}",
-        received_event
+        "Expected SystemShutdown event, got {received_event:?}"
     );
 
     Ok(())
@@ -230,8 +226,7 @@ async fn test_monitoring_error_handling() -> Result<()> {
     let error = result.expect_err("Expected error for invalid Bezier curve");
     assert!(
         error.to_string().contains("exactly 4 control points"),
-        "Error message should mention control points requirement, got: {}",
-        error
+        "Error message should mention control points requirement, got: {error}"
     );
 
     Ok(())
@@ -265,10 +260,9 @@ async fn test_monitoring_performance() -> Result<()> {
     // Assert: Performance should be reasonable
     assert!(
         ops_per_sec > 1000.0,
-        "Performance too slow: {} ops/sec",
-        ops_per_sec
+        "Performance too slow: {ops_per_sec} ops/sec"
     );
-    println!("Monitoring performance: {:.0} ops/sec", ops_per_sec);
+    println!("Monitoring performance: {ops_per_sec:.0} ops/sec");
 
     Ok(())
 }

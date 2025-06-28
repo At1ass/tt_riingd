@@ -104,8 +104,7 @@ async fn test_error_recovery() -> Result<()> {
     let error = reload_result.expect_err("Expected reload to fail with mock failure");
     assert!(
         error.to_string().contains("Mock reload failure"),
-        "Error message should contain 'Mock reload failure', got: {}",
-        error
+        "Error message should contain 'Mock reload failure', got: {error}"
     );
 
     // Test 2: Invalid curve calculation recovery
@@ -136,8 +135,7 @@ async fn test_error_recovery() -> Result<()> {
     let error = init_result.expect_err("Expected hardware initialization to fail");
     assert!(
         error.to_string().contains("Simulated hardware failure"),
-        "Error message should contain 'Simulated hardware failure', got: {}",
-        error
+        "Error message should contain 'Simulated hardware failure', got: {error}"
     );
 
     println!("✓ Error recovery mechanisms validated");
@@ -223,7 +221,7 @@ async fn test_concurrent_operations() -> Result<()> {
         let handle = tokio::spawn(async move {
             for i in 0..100 {
                 let temp = 30.0 + (i % 40) as f32 + sensor_id as f32;
-                let sensor_name = format!("sensor_{}", sensor_id);
+                let sensor_name = format!("sensor_{sensor_id}");
                 app_state.set_sensor_data(&sensor_name, temp).await;
 
                 // Small delay to simulate realistic timing
@@ -332,8 +330,7 @@ async fn test_application_shutdown() -> Result<()> {
 
     assert!(
         matches!(shutdown_event, Event::SystemShutdown),
-        "Expected SystemShutdown event, got {:?}",
-        shutdown_event
+        "Expected SystemShutdown event, got {shutdown_event:?}"
     );
     println!("✓ Graceful shutdown event processed");
 
@@ -371,8 +368,7 @@ async fn test_event_system_lifecycle() -> Result<()> {
 
     assert!(
         matches!(received_event, Event::SystemShutdown),
-        "Expected SystemShutdown event, got {:?}",
-        received_event
+        "Expected SystemShutdown event, got {received_event:?}"
     );
     println!("✓ Event system lifecycle validated");
 
@@ -518,8 +514,7 @@ async fn test_realistic_temperature_patterns() -> Result<()> {
     let final_temp = final_temp.context("Expected final temperature to be set")?;
     assert!(
         (final_temp - 45.0).abs() < 1.0,
-        "Final temperature {} should be close to 45.0",
-        final_temp
+        "Final temperature {final_temp} should be close to 45.0",
     );
 
     // Act: Simulate cooling cycle
@@ -532,8 +527,7 @@ async fn test_realistic_temperature_patterns() -> Result<()> {
     let cooled_temp = cooled_temp.context("Expected cooled temperature to be set")?;
     assert!(
         (cooled_temp - 35.0).abs() < 1.0,
-        "Cooled temperature {} should be close to 35.0",
-        cooled_temp
+        "Cooled temperature {cooled_temp} should be close to 35.0"
     );
 
     println!("✓ Realistic temperature pattern simulation completed");

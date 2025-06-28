@@ -9,11 +9,11 @@ fn test_nvml_library_loading() {
             println!("NVML library loaded successfully");
             match nvml.init() {
                 Ok(()) => println!("NVML initialized successfully"),
-                Err(e) => println!("NVML initialization failed: {}", e),
+                Err(e) => println!("NVML initialization failed: {e}"),
             }
         }
         Err(e) => {
-            println!("NVML library not available: {}", e);
+            println!("NVML library not available: {e}");
             // This is expected on systems without NVIDIA GPUs
         }
     }

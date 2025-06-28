@@ -93,7 +93,7 @@ fn fan_curve_from_bezier_config() {
 #[test]
 fn point_debug_format() {
     let point = Point { x: 42.5, y: 88.9 };
-    let debug_output = format!("{:?}", point);
+    let debug_output = format!("{point:?}");
     assert!(debug_output.contains("42.5"));
     assert!(debug_output.contains("88.9"));
 }
@@ -101,7 +101,7 @@ fn point_debug_format() {
 #[test]
 fn fan_curve_debug_format() {
     let curve = FanCurve::Constant(75);
-    let debug_output = format!("{:?}", curve);
+    let debug_output = format!("{curve:?}");
     assert!(debug_output.contains("Constant"));
     assert!(debug_output.contains("75"));
 }

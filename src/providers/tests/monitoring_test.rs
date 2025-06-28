@@ -209,14 +209,14 @@ async fn monitoring_service_multiple_sensors() {
     match timeout(Duration::from_secs(5), receiver.recv()).await {
         Ok(Ok(Event::TemperatureChanged(temps))) => {
             // Should receive temperature updates
-            println!("Received temperature data: {:?}", temps);
+            println!("Received temperature data: {temps:?}");
             assert!(!temps.is_empty());
         }
         Ok(Ok(other_event)) => {
-            println!("Received other event: {:?}", other_event);
+            println!("Received other event: {other_event:?}");
         }
         Ok(Err(e)) => {
-            println!("Event bus error: {}", e);
+            println!("Event bus error: {e}");
         }
         Err(_) => {
             println!("Timeout waiting for temperature events");
@@ -276,7 +276,7 @@ async fn monitoring_service_timing_configuration() {
     }
 
     // With faster ticking, we might get more events
-    println!("Received {} events in 3 seconds", event_count);
+    println!("Received {event_count} events in 3 seconds");
 
     // Service should still be running
     assert!(task_manager.is_running("MonitoringService"));

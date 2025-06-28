@@ -58,8 +58,7 @@ async fn test_config_hot_reload_success() -> Result<()> {
         .unwrap();
     assert!(
         matches!(silent_curve, CurveCfg::Constant { speed: 30, .. }),
-        "Expected constant curve with speed 30, got {:?}",
-        silent_curve
+        "Expected constant curve with speed 30, got {silent_curve:?}"
     );
 
     let performance_curve = updated_cfg
@@ -102,8 +101,7 @@ async fn test_config_hot_reload_invalid_config() -> Result<()> {
     let error = reload_result.expect_err("Expected reload to fail with mock failure");
     assert!(
         error.to_string().contains("Mock reload failure"),
-        "Error message should contain 'Mock reload failure', got: {}",
-        error
+        "Error message should contain 'Mock reload failure', got: {error}"
     );
 
     Ok(())

@@ -211,7 +211,7 @@ proptest! {
         let _y_accessed = point.y;
 
         // Debug formatting should work
-        let _debug_string = format!("{:?}", point);
+        let _debug_string = format!("{point:?}");
 
         // Cloning should work
         let _cloned = point;
@@ -263,9 +263,9 @@ proptest! {
         let yaml = format!(
             r#"
 version: 1
-tick_seconds: {}
+tick_seconds: {tick_seconds}
 enable_broadcast: true
-broadcast_interval: {}
+broadcast_interval: {broadcast_interval}
 controllers: []
 curves: []
 sensors: []
@@ -273,8 +273,7 @@ mappings: []
 active_curve_mappings: []
 colors: []
 color_mappings: []
-"#,
-            tick_seconds, broadcast_interval
+"#
         );
 
         let parse_result: Result<Config, _> = serde_yaml::from_str(&yaml);

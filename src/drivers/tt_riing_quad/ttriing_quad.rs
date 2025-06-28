@@ -134,7 +134,7 @@ impl TTRiingQuad {
                         .context("Failed to open device")
                         .ok()?;
                     Some(Box::new(TTRiingQuad(Arc::new(Mutex::new(Controller {
-                        name: format!("TTRiingQuad{}", id),
+                        name: format!("TTRiingQuad{id}"),
                         // dev: api.open(usb.vid, usb.pid).unwrap(),
                         dev,
                         fans: fans
