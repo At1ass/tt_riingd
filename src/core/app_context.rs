@@ -56,7 +56,8 @@ impl AppState {
             )),
             mapping: Arc::new(RwLock::new(Mapping::load_mappings(&config.mappings))),
             effect_runners: Arc::new(RwLock::new(EffectStore::build_effect_store(
-                &config.effects, &config.effect_mappings,
+                &config.effects,
+                &config.effect_mappings,
             ))),
             effect_mappings: Arc::new(RwLock::new(EffectMapping::build_color_mapping(
                 &config.effect_mappings,

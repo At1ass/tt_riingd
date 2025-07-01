@@ -93,6 +93,10 @@ impl FanController for MockSuccessfulController {
     async fn firmware_version(&self) -> Result<(u8, u8, u8)> {
         Ok(self.firmware)
     }
+
+    fn led_count(&self) -> usize {
+        0 // Not applicable for mock
+    }
 }
 
 // Mock controller that fails operations
@@ -135,6 +139,10 @@ impl FanController for MockFailingController {
 
     async fn firmware_version(&self) -> Result<(u8, u8, u8)> {
         Err(anyhow!("Firmware version failed: {}", self.error_message))
+    }
+
+    fn led_count(&self) -> usize {
+        0 // Not applicable for mock
     }
 }
 
@@ -187,6 +195,10 @@ impl FanController for MockSlowController {
     async fn firmware_version(&self) -> Result<(u8, u8, u8)> {
         sleep(Duration::from_millis(self.delay_ms)).await;
         self.inner.firmware_version().await
+    }
+
+    fn led_count(&self) -> usize {
+        self.inner.led_count()
     }
 }
 

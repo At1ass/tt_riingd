@@ -208,6 +208,12 @@ impl ControllerManager {
     pub fn controller_led_count(&self, controller: u8) -> Result<usize> {
         self.get_device(controller)
             .map(|dev| dev.led_count())
-            .map_err(|e| anyhow!("Failed to get LED count for controller {}: {}", controller, e))
+            .map_err(|e| {
+                anyhow!(
+                    "Failed to get LED count for controller {}: {}",
+                    controller,
+                    e
+                )
+            })
     }
 }

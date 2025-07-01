@@ -213,7 +213,8 @@ async fn calculate_fan_colors(
                         .controllers
                         .read()
                         .await
-                        .controller_led_count(fan_ref.controller_id as u8) {
+                        .controller_led_count(fan_ref.controller_id as u8)
+                    {
                         buf.push((fan_ref.channel, vec![(0, 0, 0); led]));
                     } else {
                         warn!(

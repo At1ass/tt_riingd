@@ -16,9 +16,10 @@ path = "src/bin/main.rs"
 
 [dependencies]
 # Async
-tokio = { version = "1.45.0", features = ["macros", "rt-multi-thread", "sync", "signal"] }
+tokio = { version = "1.45.0", features = ["macros", "rt-multi-thread", "sync", "signal", "tracing", "full"] }
 tokio-stream = "0.1.17"
 async-stream = "0.3.0"
+console-subscriber = "0.4.1"
 
 # OS
 zbus = { version = "5.6.0", default-features = false, features = ["tokio"] }

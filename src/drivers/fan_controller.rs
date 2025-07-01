@@ -22,8 +22,9 @@ use async_trait::async_trait;
 ///     async fn update_channel(&self, channel: u8, temp: f32, speed: u8) -> Result<()> { Ok(()) }
 ///     async fn update_speed_batch(&self, batch: Vec<(usize, f32, u8)>) -> Result<()> { Ok(()) }
 ///     async fn update_channel_color(&self, channel: u8, r: u8, g: u8, b: u8) -> Result<()> { Ok(()) }
-///     async fn update_color_batch(&self, batch: Vec<(usize, u8, u8, u8)>) -> Result<()> { Ok(()) }
+///     async fn update_color_batch(&self, batch: Vec<(usize, Vec<(u8, u8, u8)>)>) -> Result<()> { Ok(()) }
 ///     async fn firmware_version(&self) -> Result<(u8, u8, u8)> { Ok((1, 0, 0)) }
+///     fn led_count(&self) -> usize { 4 }
 /// }
 /// impl std::fmt::Debug for MockController {
 ///     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "MockController") }

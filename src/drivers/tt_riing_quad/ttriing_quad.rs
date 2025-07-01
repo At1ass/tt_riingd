@@ -86,13 +86,11 @@ impl FanController for TTRiingQuad {
         let ctrl = self.0.clone();
         tokio::task::spawn_blocking(move || {
             let guard = ctrl.blocking_lock();
-            batch
-                .into_iter()
-                .try_fold((), |_, (idx, buffer)| {
-                    Self::proccess_fan_inner_color(&guard, idx, buffer)
-                        .map_err(|e| anyhow::anyhow!("Failed to set color for fan {}: {}", idx, e))
-                })
-       })
+            batch.into_iter().try_fold((), |_, (idx, buffer)| {
+                Self::proccess_fan_inner_color(&guard, idx, buffer)
+                    .map_err(|e| anyhow::anyhow!("Failed to set color for fan {}: {}", idx, e))
+            })
+        })
         .await?
     }
 
@@ -188,8 +186,8 @@ impl TTRiingQuad {
         idx: usize,
         speed: u8,
     ) -> Result<(u8, u16)> {
-        guard.set_speed((idx + 1) as u8, speed)?;
-        guard.get_data((idx + 1) as u8)
+        guard.set_speed(idx as u8, speed)?;
+        guard.get_data(idx as u8)
     }
 
     fn proccess_fan_inner_color(
