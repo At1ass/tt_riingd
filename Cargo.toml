@@ -3,6 +3,13 @@ name = "tt_riingd"
 version = "1.0.0"
 edition = "2024"
 
+[profile.release]
+opt-level = 3
+debug = false
+lto = true
+codegen-units = 1
+strip = true
+
 [[bin]]
 name = "tt_riingd"
 path = "src/bin/main.rs"

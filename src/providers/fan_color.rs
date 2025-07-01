@@ -6,7 +6,7 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     app_context::AppState, event::EventBus, providers::traits::ServiceProvider,
@@ -58,7 +58,7 @@ pub struct FanColorControlServiceProvider {
     event_bus: EventBus,
 }
 
-type ControllerColorBuffer = Vec<(usize, u8, u8, u8)>;
+type ControllerColorBuffer = Vec<(usize, Vec<(u8, u8, u8)>)>;
 type ConrollerId = u8;
 type Buffer = HashMap<ConrollerId, ControllerColorBuffer>;
 
@@ -194,36 +194,53 @@ async fn calculate_fan_colors(
     _event_bus: &EventBus,
     buffer: Arc<DoubleBuffer>,
 ) -> Result<()> {
-    let effect_mappings = state.effect_mappings.read().await;
     let effect_runners = state.effect_runners.read().await;
 
     let mut write_buffer = buffer.get_write_buffer().await;
-    write_buffer.clear();
-    for (effect, fan_refs_map) in effect_mappings.effect_to_fans_iter() {
-        if fan_refs_map.is_empty() {
-            warn!("Color mapping '{}' has no targets", effect);
-            continue;
-        }
 
-        info!(
-            "Applying color '{}' to {} fan targets",
-            effect,
-            fan_refs_map.len()
-        );
+    for runner in effect_runners.runners.iter() {
+        debug!("Calculating colors for effect: {}", runner.key());
+        let instance = runner.value();
+        if let Some(rgb) = instance.runner.next_rgb().await {
+            for fan_ref in &instance.targets {
+                let buf = write_buffer.entry(fan_ref.controller_id as u8).or_default();
 
-        if let Some(effect_cfg) = effect_runners.runners.get(&effect) {
-            if let Some(rgb) = (*effect_cfg).next_rgb().await {
-                for fan_ref in fan_refs_map {
-                    write_buffer
-                        .entry(fan_ref.controller_id as u8)
-                        .or_default()
-                        .push((fan_ref.channel, rgb[0], rgb[1], rgb[2]));
+                if !buf
+                    .iter_mut()
+                    .any(|(channel, _)| *channel == fan_ref.channel)
+                {
+                    if let Ok(led) = state
+                        .controllers
+                        .read()
+                        .await
+                        .controller_led_count(fan_ref.controller_id as u8) {
+                        buf.push((fan_ref.channel, vec![(0, 0, 0); led]));
+                    } else {
+                        warn!(
+                            "Controller {} not found for fan reference: {:?}",
+                            fan_ref.controller_id, fan_ref
+                        );
+                        continue;
+                    }
                 }
-            } else {
-                warn!("No RGB color defined for effect '{}'", effect);
+
+                buf.iter_mut()
+                    .find(|(channel, _)| *channel == fan_ref.channel)
+                    .iter_mut()
+                    .for_each(|(_, buffer)| {
+                        debug!(
+                            "Setting color for controller {} channel {}: {:?}",
+                            fan_ref.controller_id, fan_ref.channel, rgb
+                        );
+                        buffer.iter_mut().for_each(|color| {
+                            color.0 = rgb[0];
+                            color.1 = rgb[1];
+                            color.2 = rgb[2];
+                        });
+                    });
             }
         } else {
-            warn!("Color '{}' not found in configuration", effect);
+            warn!("No RGB color defined for effect '{}'", runner.key());
         }
     }
 
@@ -242,7 +259,7 @@ async fn transmit_color_changes(
         .await
         .iter()
         .map(|(controller_id, color_buffer)| {
-            info!(
+            debug!(
                 "Transmitting color changes for controller {}",
                 controller_id
             );
@@ -261,7 +278,7 @@ async fn transmit_color_changes(
                         {
                             error!("Failed to set color on controller {}: {e}", controller_id);
                         } else {
-                            info!(
+                            debug!(
                                 "Successfully updated colors for controller {}",
                                 controller_id
                             );

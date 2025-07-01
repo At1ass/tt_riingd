@@ -39,6 +39,8 @@ use crate::{config::Config, drivers, drivers::fan_controller::FanController};
 /// # Ok(())
 /// # }
 /// ```
+type ControllerColorBuffer = Vec<(usize, Vec<(u8, u8, u8)>)>;
+
 #[derive(Debug, Clone)]
 pub struct ControllerManager(Arc<Vec<Box<dyn FanController>>>);
 
@@ -168,7 +170,7 @@ impl ControllerManager {
     pub async fn update_channel_color_batch(
         &self,
         controller: u8,
-        batch: Vec<(usize, u8, u8, u8)>,
+        batch: ControllerColorBuffer,
     ) -> Result<()> {
         self.get_device(controller)?.update_color_batch(batch).await
     }
@@ -201,5 +203,11 @@ impl ControllerManager {
 
     fn async_iter(&self) -> FutureIter<SliceIter<'_, Box<dyn FanController>>> {
         iter(self.0.iter())
+    }
+
+    pub fn controller_led_count(&self, controller: u8) -> Result<usize> {
+        self.get_device(controller)
+            .map(|dev| dev.led_count())
+            .map_err(|e| anyhow!("Failed to get LED count for controller {}: {}", controller, e))
     }
 }

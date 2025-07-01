@@ -1,3 +1,4 @@
+use anyhow::Result;
 use async_stream::stream;
 use core::fmt;
 use futures::{Stream, StreamExt};
@@ -6,6 +7,8 @@ use tokio::{
     sync::Mutex,
     time::{Duration, Instant},
 };
+
+use crate::config::{EffectCfg, EffectMappingCfg, FanRef};
 
 type RgbStream = Arc<Mutex<Pin<Box<dyn Stream<Item = [u8; 3]> + Send>>>>;
 
@@ -61,6 +64,33 @@ impl EffectRunner {
                 yield scale_rgb(rgb, br);
             }
         })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct EffectInstance {
+    pub runner: EffectRunner,
+    pub targets: Vec<FanRef>,
+}
+
+impl EffectInstance {
+    pub fn new(effect: EffectCfg, mapping: Option<EffectMappingCfg>) -> Result<Self> {
+        let runner = EffectCfg::into_runner(effect.clone())?;
+        if let Some(targets) = mapping {
+            let targets = targets
+                .targets
+                .iter()
+                .map(|t| FanRef {
+                    controller_id: t.controller as usize,
+                    channel: t.fan_idx as usize,
+                })
+                .collect();
+            return Ok(Self { runner, targets });
+        }
+        Err(anyhow::anyhow!(
+            "Effect {} has no targets defined",
+            effect.get_id()
+        ))
     }
 }
 

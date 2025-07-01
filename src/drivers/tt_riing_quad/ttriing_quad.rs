@@ -81,23 +81,27 @@ impl FanController for TTRiingQuad {
             .await
     }
 
-    async fn update_color_batch(&self, batch: Vec<(usize, u8, u8, u8)>) -> Result<()> {
+    async fn update_color_batch(&self, batch: Vec<(usize, Vec<(u8, u8, u8)>)>) -> Result<()> {
         debug!("Batch processing speed");
         let ctrl = self.0.clone();
         tokio::task::spawn_blocking(move || {
             let guard = ctrl.blocking_lock();
             batch
                 .into_iter()
-                .try_fold((), |_, (idx, red, green, blue)| {
-                    Self::proccess_fan_inner_color(&guard, idx, red, green, blue)
+                .try_fold((), |_, (idx, buffer)| {
+                    Self::proccess_fan_inner_color(&guard, idx, buffer)
                         .map_err(|e| anyhow::anyhow!("Failed to set color for fan {}: {}", idx, e))
                 })
-        })
+       })
         .await?
     }
 
     async fn firmware_version(&self) -> Result<(u8, u8, u8)> {
         self.read().await.get_firmware_version()
+    }
+
+    fn led_count(&self) -> usize {
+        52
     }
 }
 
@@ -168,7 +172,7 @@ impl TTRiingQuad {
         let ctrl = self.0.clone();
         tokio::task::spawn_blocking(move || {
             let guard = ctrl.blocking_lock();
-            Self::proccess_fan_inner_color(&guard, idx, green, red, blue)
+            Self::proccess_fan_inner_color(&guard, idx, vec![(red, green, blue)])
         })
         .await??;
 
@@ -191,10 +195,8 @@ impl TTRiingQuad {
     fn proccess_fan_inner_color(
         guard: &MutexGuard<'_, Controller<HidDevice>>,
         idx: usize,
-        green: u8,
-        red: u8,
-        blue: u8,
+        color_buffer: Vec<(u8, u8, u8)>,
     ) -> Result<()> {
-        guard.set_rgb((idx + 1) as u8, 0x24, vec![(green, red, blue); 52])
+        guard.set_rgb(idx as u8, 0x24, color_buffer)
     }
 }

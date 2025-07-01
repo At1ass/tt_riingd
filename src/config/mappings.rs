@@ -6,10 +6,10 @@
 use std::sync::Arc;
 
 use dashmap::{DashMap, DashSet};
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::config::cfg::{CurveMappingCfg, EffectCfg, EffectMappingCfg, MappingCfg};
-use crate::effects::effect_runner::EffectRunner;
+use crate::effects::effect_runner::EffectInstance;
 
 /// Type alias for sensor identifier keys.
 pub type SensorKey = String;
@@ -75,16 +75,34 @@ impl CurveMapping {
 
 #[derive(Default, Debug)]
 pub struct EffectStore {
-    pub runners: DashMap<String, Arc<EffectRunner>>,
+    pub runners: DashMap<String, Arc<EffectInstance>>,
 }
 
 impl EffectStore {
-    pub fn build_effect_store(effect_cfg: &[EffectCfg]) -> Self {
+    pub fn build_effect_store(
+        effect_cfg: &[EffectCfg],
+        effect_mapping: &[EffectMappingCfg],
+    ) -> Self {
         effect_cfg
             .iter()
-            .map(|e| (e.get_id(), EffectCfg::into_runner(e.clone())))
-            .fold(Self::default(), |acc, (key, runner)| {
-                if let Ok(runner) = runner {
+            .filter_map(|e| {
+                effect_mapping
+                    .iter()
+                    .find(|m| m.effect == e.get_id())
+                    .map(|mapping| {
+                        debug!(
+                            "Creating effect runner for {} with mapping {:?}",
+                            e.get_id(),
+                            mapping
+                        );
+                        (
+                            e.get_id(),
+                            EffectInstance::new(e.clone(), Some(mapping.clone())),
+                        )
+                    })
+            })
+            .fold(Self::default(), |acc, (key, runner_instance)| {
+                if let Ok(runner) = runner_instance {
                     acc.runners.insert(key.clone(), Arc::new(runner));
                 } else {
                     error!("Failed to create effect runner for {}", key);

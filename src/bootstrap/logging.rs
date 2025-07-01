@@ -82,7 +82,6 @@ pub fn init_tracing(is_daemon: bool) -> Result<Option<WorkerGuard>> {
         }
     });
 
-    // Create environment filter with sensible defaults for production
     let env_filter = EnvFilter::try_from_default_env()
         .or_else(|_| EnvFilter::try_new("tt_riingd=info,warn"))
         .map_err(|e| anyhow!("Invalid RUST_LOG filter: {}", e))?;
@@ -91,7 +90,6 @@ pub fn init_tracing(is_daemon: bool) -> Result<Option<WorkerGuard>> {
 
     let guard = match log_target.as_str() {
         "syslog" => {
-            // Syslog is the standard for daemons - use non-blocking for performance
             let syslog_writer = SyslogWriter::new()?;
             let (non_blocking, guard) = tracing_appender::non_blocking(syslog_writer);
 

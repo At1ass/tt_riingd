@@ -191,7 +191,7 @@ async fn monitoring_service_multiple_sensors() {
         sensors: Arc::new(tokio::sync::RwLock::new(sensor_manager)),
         mapping: Arc::new(RwLock::new(Mapping::load_mappings(&[]))),
         effect_runners: Arc::new(RwLock::new(
-            crate::mappings::EffectStore::build_effect_store(&[]),
+            crate::mappings::EffectStore::build_effect_store(&[], &[]),
         )),
         effect_mappings: Arc::new(RwLock::new(EffectMapping::build_color_mapping(&[]))),
         active_curves: Arc::new(RwLock::new(CurveMapping::load_mappings(&[]))),

@@ -56,7 +56,7 @@ impl AppState {
             )),
             mapping: Arc::new(RwLock::new(Mapping::load_mappings(&config.mappings))),
             effect_runners: Arc::new(RwLock::new(EffectStore::build_effect_store(
-                &config.effects,
+                &config.effects, &config.effect_mappings,
             ))),
             effect_mappings: Arc::new(RwLock::new(EffectMapping::build_color_mapping(
                 &config.effect_mappings,
@@ -83,7 +83,7 @@ impl AppState {
         let new_mapping = Mapping::load_mappings(&config.mappings);
         let new_clr_mappings = EffectMapping::build_color_mapping(&config.effect_mappings);
         let new_active_curves = CurveMapping::load_mappings(&config.active_curve_mappings);
-        let new_effects = EffectStore::build_effect_store(&config.effects);
+        let new_effects = EffectStore::build_effect_store(&config.effects, &config.effect_mappings);
 
         let mut mapping = self.mapping.write().await;
         let mut color_mappings = self.effect_mappings.write().await;
