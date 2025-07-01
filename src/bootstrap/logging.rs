@@ -83,10 +83,22 @@ pub fn init_tracing(is_daemon: bool) -> Result<Option<WorkerGuard>> {
     });
 
     let env_filter = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_new("tt_riingd=info,warn"))
+        .or_else(|_| {
+            if cfg!(feature = "tokio-console") {
+                EnvFilter::try_new("tt_riingd=info,warn,tokio=trace,runtime=trace")
+            } else {
+                EnvFilter::try_new("tt_riingd=info,warn")
+            }
+        })
         .map_err(|e| anyhow!("Invalid RUST_LOG filter: {}", e))?;
 
+    #[cfg(feature = "tokio-console")]
+    let console_layer = console_subscriber::spawn();
+
     let registry = tracing_subscriber::registry().with(env_filter);
+
+    #[cfg(feature = "tokio-console")]
+    let registry = registry.with(console_layer);
 
     let guard = match log_target.as_str() {
         "syslog" => {

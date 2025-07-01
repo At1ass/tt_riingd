@@ -3,6 +3,9 @@ name = "tt_riingd"
 version = "1.0.0"
 edition = "2024"
 
+[features]
+tokio-console = []
+
 [profile.release]
 opt-level = 3
 debug = false
