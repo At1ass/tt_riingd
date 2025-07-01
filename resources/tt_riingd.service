@@ -1,0 +1,24 @@
+[Unit]
+Description=Thermaltake Riing Fan Control Daemon (User Mode)
+After=graphical-session.target
+Wants=graphical-session.target
+
+[Service]
+Type=dbus
+BusName=io.github.tt_riingd
+ExecStart=%h/.local/bin/tt_riingd --config %h/.config/tt_riingd/config.yml
+Restart=on-failure
+RestartSec=5s
+
+# Environment configuration for user mode
+Environment=XDG_RUNTIME_DIR=%t
+Environment=RUST_LOG=info
+Environment=TT_RIINGD_LOG_TARGET=stdout
+Environment=TT_RIINGD_LOG_FORMAT=compact
+
+# Optional: Override logging for development/debugging
+# Environment=RUST_LOG=tt_riingd=debug,tt_riingd::temperature_sensors=trace
+# Environment=TT_RIINGD_LOG_FORMAT=pretty
+
+[Install]
+WantedBy=default.target
