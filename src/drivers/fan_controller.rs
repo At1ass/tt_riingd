@@ -3,6 +3,8 @@
 use anyhow::Result;
 use async_trait::async_trait;
 
+use super::registry::HardwareInfo;
+
 /// Trait for fan controller hardware implementations.
 ///
 /// Provides a unified interface for controlling fan speed, RGB lighting,
@@ -12,6 +14,7 @@ use async_trait::async_trait;
 ///
 /// ```no_run
 /// use tt_riingd::drivers::fan_controller::FanController;
+/// use tt_riingd::drivers::registry::HardwareInfo;
 /// use anyhow::Result;
 ///
 /// struct MockController;
@@ -25,6 +28,9 @@ use async_trait::async_trait;
 ///     async fn update_color_batch(&self, batch: Vec<(usize, Vec<(u8, u8, u8)>)>) -> Result<()> { Ok(()) }
 ///     async fn firmware_version(&self) -> Result<(u8, u8, u8)> { Ok((1, 0, 0)) }
 ///     fn led_count(&self) -> usize { 4 }
+///     fn hardware_info() -> HardwareInfo {
+///         HardwareInfo { vid: 0x1234, pids: vec![0x5678], channel_count: 4, name: "Mock".to_string() }
+///     }
 /// }
 /// impl std::fmt::Debug for MockController {
 ///     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "MockController") }
@@ -52,4 +58,8 @@ pub trait FanController: Send + Sync + core::fmt::Debug {
 
     /// Returns the number of LEDs controlled by this controller.
     fn led_count(&self) -> usize;
+
+    fn hardware_info() -> HardwareInfo
+    where
+        Self: Sized;
 }

@@ -3,17 +3,15 @@
 //! Provides high-level interface for controlling fan speed and RGB lighting
 //! through HID communication with Thermaltake devices.
 
-use std::{
-    slice::Iter as SliceIter,
-    sync::{Arc, LazyLock},
-};
+use std::{slice::Iter as SliceIter, sync::Arc};
 
 use anyhow::{Ok, Result, anyhow};
 use futures::stream::{Iter as FutureIter, StreamExt, iter};
-use hidapi::HidApi;
-use tracing::{info, warn};
+use tracing::warn;
 
 use crate::{config::Config, drivers, drivers::fan_controller::FanController};
+
+use super::HIDAPI;
 
 /// Thread-safe collection of fan controllers.
 ///
@@ -44,19 +42,19 @@ type ControllerColorBuffer = Vec<(usize, Vec<(u8, u8, u8)>)>;
 #[derive(Debug, Clone)]
 pub struct ControllerManager(Arc<Vec<Box<dyn FanController>>>);
 
-static HIDAPI: LazyLock<Option<HidApi>> = LazyLock::new(|| match HidApi::new() {
-    std::result::Result::Ok(api) => {
-        info!("HID API initialized successfully");
-        Some(api)
-    }
-    std::result::Result::Err(e) => {
-        warn!(
-            "HID API unavailable: {}. Hardware control will be disabled.",
-            e
-        );
-        None
-    }
-});
+// static HIDAPI: LazyLock<Option<HidApi>> = LazyLock::new(|| match HidApi::new() {
+//     std::result::Result::Ok(api) => {
+//         info!("HID API initialized successfully");
+//         Some(api)
+//     }
+//     std::result::Result::Err(e) => {
+//         warn!(
+//             "HID API unavailable: {}. Hardware control will be disabled.",
+//             e
+//         );
+//         None
+//     }
+// });
 
 impl ControllerManager {
     /// Creates empty Controllers for testing purposes.

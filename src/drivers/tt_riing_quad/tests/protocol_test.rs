@@ -42,9 +42,9 @@ fn set_rgb_bytes() {
     };
     let bytes = cmd.to_bytes();
     std::assert_eq!(bytes[0..5], [0x00, 0x32, 0x52, 3, 0x24]);
-    // payload
+    // payload (g, r, b order in protocol)
     for chunk in bytes[5..].chunks(3) {
-        std::assert_eq!(chunk, &[1, 2, 3]);
+        std::assert_eq!(chunk, &[2, 1, 3]); // g=2, r=1, b=3
     }
     std::assert_eq!(bytes.len(), 5 + 52 * 3);
 }

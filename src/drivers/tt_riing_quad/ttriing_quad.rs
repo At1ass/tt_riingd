@@ -1,4 +1,7 @@
-use crate::{config::ControllerCfg, drivers::fan_controller::FanController};
+use crate::{
+    config::ControllerCfg,
+    drivers::{fan_controller::FanController, registry::HardwareInfo},
+};
 use std::sync::Arc;
 
 use anyhow::{Context, Ok, Result};
@@ -100,6 +103,15 @@ impl FanController for TTRiingQuad {
 
     fn led_count(&self) -> usize {
         52
+    }
+
+    fn hardware_info() -> HardwareInfo {
+        HardwareInfo {
+            vid: 0x264a,
+            pids: vec![0x232B, 0x232C, 0x232D, 0x232E],
+            channel_count: 5,
+            name: "TTRiingQuad".to_string(),
+        }
     }
 }
 

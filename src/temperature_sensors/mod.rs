@@ -1,3 +1,4 @@
+mod dummy_sensor;
 mod lm_sensor;
 mod nvidia;
 pub mod sensor;

@@ -71,7 +71,7 @@ impl Command {
             } => {
                 let mut buf = Vec::with_capacity(5 + 3 * colors.len());
                 buf.extend_from_slice(&[PREFIX_0, PREFIX_1_32, CMD_SET_RGB, port, mode]);
-                for &(g, r, b) in colors {
+                for &(r, g, b) in colors {
                     buf.extend_from_slice(&[g, r, b]);
                 }
                 buf
