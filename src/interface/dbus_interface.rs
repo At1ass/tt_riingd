@@ -116,17 +116,17 @@ impl DBusInterface {
         Ok(String::from("DefaultCurve")) // Placeholder for actual implementation
     }
 
-    /// Gets the firmware version for a controller.
-    async fn get_firmware_version(&self, controller: u8) -> zbus::fdo::Result<String> {
-        self.app_state
-            .controllers
-            .read()
-            .await
-            .get_firmware_version(controller)
-            .await
-            .map_err(|e| zbus::fdo::Error::Failed(format!("Firmware version not found: {e}")))
-            .map(|(mj, mi, pa)| format!("{mj}.{mi}.{pa}"))
-    }
+    // /// Gets the firmware version for a controller.
+    // async fn get_firmware_version(&self, controller: u8) -> zbus::fdo::Result<String> {
+    //     self.app_state
+    //         .controllers
+    //         .read()
+    //         .await
+    //         .get_firmware_version(controller)
+    //         .await
+    //         .map_err(|e| zbus::fdo::Error::Failed(format!("Firmware version not found: {e}")))
+    //         .map(|(mj, mi, pa)| format!("{mj}.{mi}.{pa}"))
+    // }
 
     /// Updates curve data for a specific curve.
     async fn update_curve_data(

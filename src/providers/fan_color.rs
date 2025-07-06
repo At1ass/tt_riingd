@@ -8,6 +8,7 @@ use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
+use crate::drivers::commands::{BatchCommand, ExecutionMode};
 use crate::{
     app_context::AppState, event::EventBus, providers::traits::ServiceProvider,
     task_manager::TaskManager,
@@ -213,7 +214,8 @@ async fn calculate_fan_colors(
                         .controllers
                         .read()
                         .await
-                        .controller_led_count(fan_ref.controller_id as u8)
+                        .led_count(fan_ref.controller_id as u8)
+                        .await
                     {
                         buf.push((fan_ref.channel, vec![(0, 0, 0); led]));
                     } else {
@@ -255,43 +257,17 @@ async fn transmit_color_changes(
     _event_bus: &EventBus,
     buffer: Arc<DoubleBuffer>,
 ) -> Result<()> {
-    let tasks = buffer
-        .get_read_buffer()
+    let read_buffer = buffer.get_read_buffer().await;
+
+    state
+        .controllers
+        .read()
         .await
-        .iter()
-        .map(|(controller_id, color_buffer)| {
-            debug!(
-                "Transmitting color changes for controller {}",
-                controller_id
-            );
-            let value = state.clone();
-            let controller_id = *controller_id;
-            let color_buffer = color_buffer.clone();
-            tokio::spawn({
-                {
-                    async move {
-                        if let Err(e) = value
-                            .controllers
-                            .read()
-                            .await
-                            .update_channel_color_batch(controller_id, color_buffer)
-                            .await
-                        {
-                            error!("Failed to set color on controller {}: {e}", controller_id);
-                        } else {
-                            debug!(
-                                "Successfully updated colors for controller {}",
-                                controller_id
-                            );
-                        }
-                    }
-                }
-            })
-        })
-        .collect::<Vec<_>>();
-
-    futures::future::join_all(tasks).await;
-
+        .batch_update(
+            BatchCommand::SetColors { data: &read_buffer },
+            ExecutionMode::Blocking,
+        )
+        .await?;
     Ok(())
 }
 

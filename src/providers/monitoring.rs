@@ -9,6 +9,7 @@ use tracing::{error, info};
 
 use crate::{
     app_context::AppState,
+    drivers::commands::{BatchCommand, ExecutionMode},
     event::{Event, EventBus},
     mappings::FanRef,
     providers::traits::ServiceProvider,
@@ -169,7 +170,7 @@ async fn collect_and_process_temperatures(
 
                     batch_data.entry(controller_id).or_default().push((
                         channel as usize,
-                        temp,
+                        // temp,
                         speed,
                     ));
                 }
@@ -181,12 +182,13 @@ async fn collect_and_process_temperatures(
     }
 
     let controllers = state.controllers.read().await;
-    for (controller_id, data) in batch_data {
-        controllers
-            .update_channel_batch(controller_id, data)
-            .await
-            .context(format!("Failed to update controller {controller_id}"))?;
-    }
+    controllers
+        .batch_update(
+            BatchCommand::SetSpeeds { data: &batch_data },
+            ExecutionMode::Blocking,
+        )
+        .await
+        .context("Failed to update fan speeds in batch")?;
 
     *state.sensor_data.write().await = temperatures.clone();
 

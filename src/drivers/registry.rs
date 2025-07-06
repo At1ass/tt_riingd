@@ -160,13 +160,11 @@ impl Registry {
             }
         };
 
-        // Get all connected HID devices
         let device_list = hidapi.device_list();
         let supported_hardware = Self::get_supported_hardware();
 
         let detected: Vec<DetectedController> = device_list
             .filter_map(|device| {
-                // Find matching hardware info for this device
                 supported_hardware.iter().find_map(|hw_info| {
                     if device.vendor_id() == hw_info.vid
                         && hw_info.pids.contains(&device.product_id())

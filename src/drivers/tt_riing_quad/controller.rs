@@ -48,7 +48,7 @@ impl<Io: DeviceIO> Controller<Io> {
         self.dev.write(&pkt)?;
         let mut buf = vec![0u8; cmd.expected_response_len()];
         self.dev
-            .read(&mut buf, READ_TIMEOUT)
+            .read(&mut buf, READ_TIMEOUT + READ_TIMEOUT)
             .map_err(|e| anyhow!("{e}"))?;
         Response::parse(cmd, &buf)
     }

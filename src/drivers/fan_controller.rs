@@ -45,13 +45,13 @@ pub trait FanController: Send + Sync + core::fmt::Debug {
     async fn update_channel(&self, channel: u8, temp: f32, speed: u8) -> Result<()>;
 
     /// Updates multiple channels with a batch of (temperature, speed) pairs.
-    async fn update_speed_batch(&self, batch: Vec<(usize, f32, u8)>) -> Result<()>;
+    async fn update_speed_batch(&self, batch: &[(usize, u8)]) -> Result<()>;
 
     /// Sets RGB color for a specific channel.
     async fn update_channel_color(&self, _channel: u8, red: u8, green: u8, blue: u8) -> Result<()>;
 
     /// Updates multiple channels with a batch of (channel index, temperature, speed) tuples.
-    async fn update_color_batch(&self, batch: Vec<(usize, Vec<(u8, u8, u8)>)>) -> Result<()>;
+    async fn update_color_batch(&self, batch: &[(usize, &[(u8, u8, u8)])]) -> Result<()>;
 
     /// Returns the firmware version as (major, minor, patch).
     async fn firmware_version(&self) -> Result<(u8, u8, u8)>;

@@ -179,8 +179,9 @@ async fn monitoring_service_multiple_sensors() {
         Box::new(MockTemperatureSensor::new("gpu_temp", 62.3)),
     ];
 
-    let controllers =
-        ControllerManager::init_from_cfg(&config).unwrap_or_else(|_| ControllerManager::empty());
+    let controllers = ControllerManager::init_from_cfg(&config)
+        .await
+        .unwrap_or_else(|_| ControllerManager::empty());
 
     // Create AppState with our mock sensors wrapped in SensorManager
     let sensor_manager = sensor_manager::SensorManager::new_from_sensors(sensors);

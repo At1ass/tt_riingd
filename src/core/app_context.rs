@@ -48,6 +48,7 @@ impl AppState {
         Ok(Self {
             controllers: Arc::new(RwLock::new(
                 controller_manager::ControllerManager::init_from_cfg(&config)
+                    .await
                     .map_err(|e| anyhow::anyhow!("Failed to initialize controllers: {}", e))?,
             )),
             sensors: Arc::new(RwLock::new(

@@ -8,6 +8,7 @@ use tracing::{error, info, warn};
 use crate::{
     app_context::AppState,
     config::ConfigManager,
+    drivers::commands::{BatchCommand, ExecutionMode},
     event::{ConfigChangeType, Event, EventBus},
     providers::{
         AppStateProvider, AsyncProvider, BroadcastServiceProvider, ConfigWatcherServiceProvider,
@@ -78,7 +79,8 @@ impl SystemCoordinator {
             .controllers
             .read()
             .await
-            .send_init()
+            .batch_update(BatchCommand::Init, ExecutionMode::Blocking)
+            // .send_init()
             .await
             .context("Failed to initialize hardware controllers")?;
 
@@ -300,6 +302,12 @@ impl SystemCoordinator {
 
         if let Err(e) = self.task_manager.shutdown_all().await {
             error!("Error during task shutdown: {}", e);
+        }
+
+        if let Some(state) = &self.shared_state {
+            state.controllers.write().await.shutdown().await;
+        } else {
+            warn!("Cannot shutdown: system state not initialized");
         }
 
         info!("Shutdown complete");

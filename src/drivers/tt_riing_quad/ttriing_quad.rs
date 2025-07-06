@@ -4,7 +4,7 @@ use crate::{
 };
 use std::sync::Arc;
 
-use anyhow::{Context, Ok, Result};
+use anyhow::{anyhow, Context, Ok, Result};
 use async_trait::async_trait;
 use hidapi::{HidApi, HidDevice};
 use tokio::sync::{Mutex, MutexGuard};
@@ -50,21 +50,33 @@ pub struct TTRiingQuad(Arc<Mutex<Controller<HidDevice>>>);
 impl FanController for TTRiingQuad {
     async fn send_init(&self) -> Result<()> {
         debug!("Initializing TTRiingQuad controller");
-        self.read().await.init()
+        let ctrl = self.0.clone();
+        tokio::task::spawn_blocking({
+            move || {
+                let guard = ctrl.blocking_lock();
+                Self::proccess_init(&guard).map_err(|e| {
+                    anyhow!("Failed to initialize TTRiingQuad controller: {e}")
+                })
+            }
+        }).await??;
+
+        debug!("TTRiingQuad controller initialized successfully");
+        Ok(())
     }
 
     async fn update_channel(&self, channel: u8, temp: f32, speed: u8) -> Result<()> {
         self.process_fan((channel - 1) as usize, temp, speed).await
     }
 
-    async fn update_speed_batch(&self, batch: Vec<(usize, f32, u8)>) -> Result<()> {
+    async fn update_speed_batch(&self, batch: &[(usize, u8)]) -> Result<()> {
         debug!("Batch processing speed");
         let ctrl = self.0.clone();
+        let batch_owned = batch.to_owned();
         let result = tokio::task::spawn_blocking(move || {
             let guard = ctrl.blocking_lock();
-            batch
+            batch_owned
                 .into_iter()
-                .map(|(idx, _temp, speed)| {
+                .map(|(idx, speed)| {
                     Self::proccess_fan_inner(&guard, idx, speed)
                         .map(|(speed, rpm)| (idx, speed, rpm))
                 })
@@ -84,12 +96,17 @@ impl FanController for TTRiingQuad {
             .await
     }
 
-    async fn update_color_batch(&self, batch: Vec<(usize, Vec<(u8, u8, u8)>)>) -> Result<()> {
+    async fn update_color_batch(&self, batch: &[(usize, &[(u8, u8, u8)])]) -> Result<()> {
         debug!("Batch processing speed");
         let ctrl = self.0.clone();
+        let batch_owned = batch
+            .iter()
+            .map(|(idx, colors)| (*idx, colors.to_vec()))
+            .collect::<Vec<_>>();
+
         tokio::task::spawn_blocking(move || {
             let guard = ctrl.blocking_lock();
-            batch.into_iter().try_fold((), |_, (idx, buffer)| {
+            batch_owned.into_iter().try_fold((), |_, (idx, buffer)| {
                 Self::proccess_fan_inner_color(&guard, idx, buffer)
                     .map_err(|e| anyhow::anyhow!("Failed to set color for fan {}: {}", idx, e))
             })
@@ -138,7 +155,7 @@ impl TTRiingQuad {
     pub fn find_controllers(
         api: &HidApi,
         ctrl_cfg: &[ControllerCfg],
-    ) -> Result<Vec<Box<dyn FanController>>> {
+    ) -> Result<Vec<Arc<dyn FanController>>> {
         Ok(ctrl_cfg
             .iter()
             .filter_map(|cfg| {
@@ -147,7 +164,7 @@ impl TTRiingQuad {
                         .open(usb.vid, usb.pid)
                         .context("Failed to open device")
                         .ok()?;
-                    Some(Box::new(TTRiingQuad(Arc::new(Mutex::new(Controller {
+                    Some(Arc::new(TTRiingQuad(Arc::new(Mutex::new(Controller {
                         name: format!("TTRiingQuad{id}"),
                         // dev: api.open(usb.vid, usb.pid).unwrap(),
                         dev,
@@ -158,7 +175,7 @@ impl TTRiingQuad {
                                 current_rpm: 0,
                             })
                             .collect(),
-                    })))) as Box<dyn FanController>)
+                    })))) as Arc<dyn FanController>)
                 } else {
                     None
                 }
@@ -191,6 +208,12 @@ impl TTRiingQuad {
 
     async fn read(&self) -> MutexGuard<'_, Controller<HidDevice>> {
         self.0.lock().await
+    }
+
+    fn proccess_init(
+        guard: &MutexGuard<'_, Controller<HidDevice>>,
+    ) -> Result<()> {
+        guard.init()
     }
 
     fn proccess_fan_inner(
