@@ -148,7 +148,7 @@ async fn run_calculate_colors_service(
     buffer: Arc<DoubleBuffer>,
     cancel_token: CancellationToken,
 ) -> Result<()> {
-    let mut interval = interval(Duration::from_millis(16));
+    let mut interval = interval(Duration::from_millis(50));
 
     loop {
         tokio::select! {

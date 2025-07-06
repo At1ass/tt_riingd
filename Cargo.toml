@@ -13,6 +13,12 @@ lto = true
 codegen-units = 1
 strip = true
 
+[profile.profiling]              # любое имя, главное — уникальное
+inherits       = "release"       # копируем всё из release
+debug          = true            # DWARF-символы
+strip          = "none"          # ничего не выбрасываем
+lto            = false           # профилировщикам LTO не нужна, а сборка быстрее
+
 [[bin]]
 name = "tt_riingd"
 path = "src/bin/main.rs"
@@ -30,6 +36,7 @@ hidapi = { version = "2.6" }
 daemonize = "0.5"
 signal-hook = { version = "0.3", features = ["iterator"] }
 event-listener = "5.4.0"
+arrayvec = "0.7.4"
 
 # Config
 # unconfig = { git = "https://github.com/rojer-98/unconfig.git", default-features = false }

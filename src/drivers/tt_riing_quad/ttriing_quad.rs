@@ -51,67 +51,39 @@ impl FanController for TTRiingQuad {
     async fn send_init(&self) -> Result<()> {
         debug!("Initializing TTRiingQuad controller");
         let ctrl = self.0.clone();
-        tokio::task::spawn_blocking({
-            move || {
-                let guard = ctrl.blocking_lock();
-                Self::proccess_init(&guard).map_err(|e| {
-                    anyhow!("Failed to initialize TTRiingQuad controller: {e}")
-                })
-            }
-        }).await??;
+        Self::proccess_init(&ctrl.lock().await)
+            .map_err(|e| anyhow!("Failed to initialize TTRiingQuad controller: {e}"))?;
 
         debug!("TTRiingQuad controller initialized successfully");
         Ok(())
     }
 
-    async fn update_channel(&self, channel: u8, temp: f32, speed: u8) -> Result<()> {
-        self.process_fan((channel - 1) as usize, temp, speed).await
-    }
-
     async fn update_speed_batch(&self, batch: &[(usize, u8)]) -> Result<()> {
         debug!("Batch processing speed");
-        let ctrl = self.0.clone();
-        let batch_owned = batch.to_owned();
-        let result = tokio::task::spawn_blocking(move || {
-            let guard = ctrl.blocking_lock();
-            batch_owned
-                .into_iter()
+        let mut guard = self.0.lock().await;
+        let result ={
+            batch
+                .iter()
                 .map(|(idx, speed)| {
-                    Self::proccess_fan_inner(&guard, idx, speed)
+                    Self::proccess_fan_inner(&guard, *idx, *speed)
                         .map(|(speed, rpm)| (idx, speed, rpm))
                 })
                 .collect::<Result<Vec<_>>>()
-        })
-        .await??;
+        }?;
 
-        let mut guard = self.0.lock().await;
         result.into_iter().for_each(|(channel, speed, rpm)| {
             guard.fans[channel - 1].update_stats(speed, rpm);
         });
         Ok(())
     }
 
-    async fn update_channel_color(&self, channel: u8, red: u8, green: u8, blue: u8) -> Result<()> {
-        self.process_fan_color((channel - 1) as usize, green, red, blue)
-            .await
-    }
-
     async fn update_color_batch(&self, batch: &[(usize, &[(u8, u8, u8)])]) -> Result<()> {
         debug!("Batch processing speed");
-        let ctrl = self.0.clone();
-        let batch_owned = batch
-            .iter()
-            .map(|(idx, colors)| (*idx, colors.to_vec()))
-            .collect::<Vec<_>>();
-
-        tokio::task::spawn_blocking(move || {
-            let guard = ctrl.blocking_lock();
-            batch_owned.into_iter().try_fold((), |_, (idx, buffer)| {
-                Self::proccess_fan_inner_color(&guard, idx, buffer)
-                    .map_err(|e| anyhow::anyhow!("Failed to set color for fan {}: {}", idx, e))
-            })
+        let guard = self.0.lock().await;
+        batch.iter().try_fold((), |_, (idx, buffer)| {
+            Self::proccess_fan_inner_color(&guard, *idx, buffer)
+                .map_err(|e| anyhow::anyhow!("Failed to set color for fan {}: {}", idx, e))
         })
-        .await?
     }
 
     async fn firmware_version(&self) -> Result<(u8, u8, u8)> {
@@ -162,11 +134,10 @@ impl TTRiingQuad {
                 if let ControllerCfg::RiingQuad { id, usb, fans } = cfg {
                     let dev = api
                         .open(usb.vid, usb.pid)
-                        .context("Failed to open device")
+                        .map_err(|e| anyhow!("Failed to open device: {e}"))
                         .ok()?;
                     Some(Arc::new(TTRiingQuad(Arc::new(Mutex::new(Controller {
                         name: format!("TTRiingQuad{id}"),
-                        // dev: api.open(usb.vid, usb.pid).unwrap(),
                         dev,
                         fans: fans
                             .iter()
@@ -181,29 +152,6 @@ impl TTRiingQuad {
                 }
             })
             .collect())
-    }
-
-    async fn process_fan(&self, idx: usize, _temp: f32, speed: u8) -> Result<()> {
-        let ctrl = self.0.clone();
-        let (speed, rpm) = tokio::task::spawn_blocking(move || {
-            let guard = ctrl.blocking_lock();
-            Self::proccess_fan_inner(&guard, idx, speed)
-        })
-        .await??;
-
-        self.0.lock().await.fans[idx].update_stats(speed, rpm);
-        Ok(())
-    }
-
-    async fn process_fan_color(&self, idx: usize, green: u8, red: u8, blue: u8) -> Result<()> {
-        let ctrl = self.0.clone();
-        tokio::task::spawn_blocking(move || {
-            let guard = ctrl.blocking_lock();
-            Self::proccess_fan_inner_color(&guard, idx, vec![(red, green, blue)])
-        })
-        .await??;
-
-        Ok(())
     }
 
     async fn read(&self) -> MutexGuard<'_, Controller<HidDevice>> {
@@ -228,7 +176,7 @@ impl TTRiingQuad {
     fn proccess_fan_inner_color(
         guard: &MutexGuard<'_, Controller<HidDevice>>,
         idx: usize,
-        color_buffer: Vec<(u8, u8, u8)>,
+        color_buffer: &[(u8, u8, u8)],
     ) -> Result<()> {
         guard.set_rgb(idx as u8, 0x24, color_buffer)
     }

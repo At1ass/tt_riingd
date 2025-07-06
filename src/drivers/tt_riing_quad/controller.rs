@@ -1,4 +1,5 @@
 use anyhow::{Result, anyhow};
+use arrayvec::ArrayVec;
 
 use super::{
     device_io::DeviceIO,
@@ -7,6 +8,8 @@ use super::{
 
 /// HID communication timeout in milliseconds.
 pub const READ_TIMEOUT: i32 = 250;
+
+type PacketBuffer = ArrayVec<u8, 193>;
 
 /// Individual fan state and configuration.
 ///
@@ -44,11 +47,13 @@ pub struct Controller<Io: DeviceIO> {
 
 impl<Io: DeviceIO> Controller<Io> {
     fn request(&self, cmd: Command) -> Result<Response> {
-        let pkt = cmd.to_bytes();
+        let mut pkt = PacketBuffer::new();
+        cmd.encode(&mut pkt)
+            .map_err(|e| anyhow!("Failed to encode command: {e}"))?;
         self.dev.write(&pkt)?;
-        let mut buf = vec![0u8; cmd.expected_response_len()];
+        let mut buf = [0u8; 193];
         self.dev
-            .read(&mut buf, READ_TIMEOUT + READ_TIMEOUT)
+            .read(&mut buf, READ_TIMEOUT)
             .map_err(|e| anyhow!("{e}"))?;
         Response::parse(cmd, &buf)
     }
@@ -139,7 +144,7 @@ impl<Io: DeviceIO> Controller<Io> {
     /// # Errors
     ///
     /// Returns an error if communication fails or parameters are invalid.
-    pub fn set_rgb(&self, port: u8, mode: u8, colors: Vec<(u8, u8, u8)>) -> Result<()> {
+    pub fn set_rgb(&self, port: u8, mode: u8, colors: &[(u8, u8, u8)]) -> Result<()> {
         match self.request(Command::SetRgb { port, mode, colors }) {
             Ok(Response::Status(0xFC)) => Ok(()),
             Ok(_) => Err(anyhow!("Invalid set rgb response: Expected status 0xFC")),

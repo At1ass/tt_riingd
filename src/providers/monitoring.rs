@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::interval;
+use tokio::{sync::RwLock, time::interval};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
@@ -61,15 +61,42 @@ impl MonitoringServiceProvider {
     }
 }
 
+pub struct MonitoringBuffer {
+    /// Buffer for batch data to be processed.
+    pub batch_data: HashMap<u8, Vec<(usize, u8)>>,
+    pub temp_data: HashMap<String, f32>,
+}
+
+impl MonitoringBuffer {
+    /// Creates a new monitoring buffer.
+    pub fn new() -> Self {
+        Self {
+            batch_data: HashMap::new(),
+            temp_data: HashMap::new(),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        // let mut batch_data = self.batch_data.write().await;
+        self.batch_data.clear();
+        // let mut temp_data = self.temp_data.write().await;
+        self.temp_data.clear();
+    }
+}
+
 #[async_trait]
 impl ServiceProvider for MonitoringServiceProvider {
     async fn start(&self, task_manager: &mut TaskManager) -> Result<()> {
         let state = self.state.clone();
         let event_bus = self.event_bus.clone();
 
+        // Create a shared buffer for batch data
+        let buffer = Arc::new(RwLock::new(MonitoringBuffer::new()));
+
         task_manager
             .spawn_task(self.name().to_string(), |cancel_token| async move {
-                run_monitoring_service(state, event_bus, cancel_token).await
+                let buffer_m = buffer.clone();
+                run_monitoring_service(state, event_bus, buffer_m, cancel_token).await
             })
             .await
     }
@@ -90,6 +117,7 @@ impl ServiceProvider for MonitoringServiceProvider {
 async fn run_monitoring_service(
     state: Arc<AppState>,
     event_bus: EventBus,
+    batch_data: Arc<RwLock<MonitoringBuffer>>,
     cancel_token: CancellationToken,
 ) -> Result<()> {
     let mut interval = interval(Duration::from_secs(u64::from(
@@ -103,7 +131,7 @@ async fn run_monitoring_service(
                 break;
             }
             _instant = interval.tick() => {
-                if let Err(e) = collect_and_process_temperatures(&state, &event_bus).await {
+                if let Err(e) = collect_and_process_temperatures(&state, &event_bus, batch_data.clone()).await {
                     error!("Failed to collect temperatures: {e}");
                 }
             }
@@ -144,17 +172,20 @@ async fn calculate_fan_speed(
 
 async fn collect_and_process_temperatures(
     state: &Arc<AppState>,
-    event_bus: &EventBus,
+    _event_bus: &EventBus,
+    batch_data: Arc<RwLock<MonitoringBuffer>>,
 ) -> Result<()> {
-    let mut temperatures = HashMap::new();
+
+    let mut batch_data = batch_data.write().await;
+
+    batch_data.clear();
 
     let sensors = state.sensors.read().await;
-    let mut batch_data: HashMap<u8, Vec<_>> = HashMap::new();
     for sensor in sensors.iter() {
         match sensor.read_temperature().await {
             Ok(temp) => {
                 let sensor_name = sensor.key();
-                temperatures.insert(sensor_name.clone(), temp);
+                batch_data.temp_data.insert(sensor_name.clone(), temp);
                 info!("Temperature of {sensor_name}: {temp:.2}°C");
 
                 for fan in state.mapping.read().await.fans_for_sensor(&sensor_name) {
@@ -168,7 +199,7 @@ async fn collect_and_process_temperatures(
                         .await
                         .context("Failed to calculate fan speed")?;
 
-                    batch_data.entry(controller_id).or_default().push((
+                    batch_data.batch_data.entry(controller_id).or_default().push((
                         channel as usize,
                         // temp,
                         speed,
@@ -184,18 +215,18 @@ async fn collect_and_process_temperatures(
     let controllers = state.controllers.read().await;
     controllers
         .batch_update(
-            BatchCommand::SetSpeeds { data: &batch_data },
+            BatchCommand::SetSpeeds { data: &batch_data.batch_data },
             ExecutionMode::Blocking,
         )
         .await
         .context("Failed to update fan speeds in batch")?;
 
-    *state.sensor_data.write().await = temperatures.clone();
+    *state.sensor_data.write().await = batch_data.temp_data.clone();
 
-    if let Err(e) = event_bus.publish(Event::TemperatureChanged(temperatures)) {
-        error!("Failed to publish temperature event: {e}");
-    }
-
+    // if let Err(e) = event_bus.publish(Event::TemperatureChanged(temperatures)) {
+    //     error!("Failed to publish temperature event: {e}");
+    // }
+    //
     Ok(())
 }
 

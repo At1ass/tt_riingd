@@ -41,14 +41,8 @@ pub trait FanController: Send + Sync + core::fmt::Debug {
     /// Initializes the controller hardware.
     async fn send_init(&self) -> Result<()>;
 
-    /// Updates fan speed for a specific channel based on temperature.
-    async fn update_channel(&self, channel: u8, temp: f32, speed: u8) -> Result<()>;
-
     /// Updates multiple channels with a batch of (temperature, speed) pairs.
     async fn update_speed_batch(&self, batch: &[(usize, u8)]) -> Result<()>;
-
-    /// Sets RGB color for a specific channel.
-    async fn update_channel_color(&self, _channel: u8, red: u8, green: u8, blue: u8) -> Result<()>;
 
     /// Updates multiple channels with a batch of (channel index, temperature, speed) tuples.
     async fn update_color_batch(&self, batch: &[(usize, &[(u8, u8, u8)])]) -> Result<()>;
