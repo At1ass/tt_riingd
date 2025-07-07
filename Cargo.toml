@@ -37,6 +37,8 @@ daemonize = "0.5"
 signal-hook = { version = "0.3", features = ["iterator"] }
 event-listener = "5.4.0"
 arrayvec = "0.7.4"
+tokio-udev = "0.9"
+udev = "0.7"
 
 # Config
 # unconfig = { git = "https://github.com/rojer-98/unconfig.git", default-features = false }

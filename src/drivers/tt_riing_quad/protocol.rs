@@ -86,11 +86,7 @@ impl Command<'_> {
                 protocol_consts::SPEED_FLAG,
                 speed,
             ]),
-            Command::SetRgb {
-                port,
-                mode,
-                colors,
-            } => {
+            Command::SetRgb { port, mode, colors } => {
                 if buf.capacity() < protocol_consts::RESPONSE_LEN {
                     return Err(anyhow!("Buffer too small for SetRgb command"));
                 }
@@ -122,11 +118,7 @@ impl Command<'_> {
                 SPEED_FLAG,
                 speed,
             ],
-            Command::SetRgb {
-                port,
-                mode,
-                colors,
-            } => {
+            Command::SetRgb { port, mode, colors } => {
                 let mut buf = Vec::with_capacity(5 + 3 * colors.len());
                 buf.extend_from_slice(&[PREFIX_0, PREFIX_1_32, CMD_SET_RGB, port, mode]);
                 for &(r, g, b) in colors {

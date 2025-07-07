@@ -9,11 +9,11 @@ use crate::{
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
-    env, fs,
+    env,
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tokio::sync::RwLock;
+use tokio::{fs, sync::RwLock};
 use tracing::info;
 
 use crate::event::ConfigChangeType;
@@ -22,7 +22,7 @@ use crate::event::ConfigChangeType;
 const MAX_ITERATIONS: usize = 100;
 
 /// Precision epsilon for Bezier curve calculations.
-const EPSILON: f32 = 1e-6;
+const EPSILON: f32 = 1e-2;
 
 /// Main configuration structure for the tt_riingd daemon.
 ///
@@ -780,6 +780,7 @@ impl ConfigManager {
     /// Loads configuration from a specific path (internal helper).
     async fn load_config_from_path(path: &Path) -> Result<Config> {
         let content = fs::read_to_string(path)
+            .await
             .with_context(|| format!("Failed to read config file: {}", path.display()))?;
 
         let mut config: Config = serde_yaml::from_str(&content)

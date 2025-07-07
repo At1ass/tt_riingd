@@ -4,7 +4,7 @@ use crate::{
 };
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Ok, Result};
+use anyhow::{Ok, Result, anyhow};
 use async_trait::async_trait;
 use hidapi::{HidApi, HidDevice};
 use tokio::sync::{Mutex, MutexGuard};
@@ -61,7 +61,7 @@ impl FanController for TTRiingQuad {
     async fn update_speed_batch(&self, batch: &[(usize, u8)]) -> Result<()> {
         debug!("Batch processing speed");
         let mut guard = self.0.lock().await;
-        let result ={
+        let result = {
             batch
                 .iter()
                 .map(|(idx, speed)| {
@@ -158,9 +158,7 @@ impl TTRiingQuad {
         self.0.lock().await
     }
 
-    fn proccess_init(
-        guard: &MutexGuard<'_, Controller<HidDevice>>,
-    ) -> Result<()> {
+    fn proccess_init(guard: &MutexGuard<'_, Controller<HidDevice>>) -> Result<()> {
         guard.init()
     }
 

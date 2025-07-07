@@ -1,0 +1,11 @@
+# /usr/lib/udev/rules.d/71-tt-riingd.rules
+ACTION=="add|change", \
+  SUBSYSTEM=="hidraw", SUBSYSTEMS=="usb", \
+  ATTRS{idVendor}=="264a", \
+  ATTRS{idProduct}=="232[bcdeBCDE]", \
+  ENV{TT_RIING}="1", \
+  ENV{TT_RIING_VID}="$attr{idVendor}", \
+  ENV{TT_RIING_PID}="$attr{idProduct}", \
+  TAG+="uaccess", \
+  MODE="0660", \
+  ATTRS{power/control}="on"

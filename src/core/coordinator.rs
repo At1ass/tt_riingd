@@ -13,7 +13,7 @@ use crate::{
     providers::{
         AppStateProvider, AsyncProvider, BroadcastServiceProvider, ConfigWatcherServiceProvider,
         DBusServiceProvider, FanColorControlServiceProvider, MonitoringServiceProvider,
-        ServiceProvider,
+        ServiceProvider, UdevWatcherServiceProvider,
     },
     task_manager::TaskManager,
 };
@@ -108,6 +108,10 @@ impl SystemCoordinator {
                 self.event_bus.clone(),
             )),
             Box::new(ConfigWatcherServiceProvider::new(
+                state.clone(),
+                self.event_bus.clone(),
+            )),
+            Box::new(UdevWatcherServiceProvider::new(
                 state.clone(),
                 self.event_bus.clone(),
             )),

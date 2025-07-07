@@ -10,6 +10,7 @@ pub mod dbus;
 pub mod fan_color;
 pub mod monitoring;
 pub mod traits;
+pub mod udev_watcher;
 
 // Re-export core types for convenience
 pub use app_state::AppStateProvider;
@@ -19,6 +20,7 @@ pub use dbus::DBusServiceProvider;
 pub use fan_color::FanColorControlServiceProvider;
 pub use monitoring::MonitoringServiceProvider;
 pub use traits::{AsyncProvider, ServiceProvider};
+pub use udev_watcher::UdevWatcherServiceProvider;
 
 #[cfg(test)]
 mod integration_tests {

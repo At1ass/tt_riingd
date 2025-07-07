@@ -5,12 +5,12 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::{sync::RwLock, time::interval};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::{
     app_context::AppState,
     drivers::commands::{BatchCommand, ExecutionMode},
-    event::{Event, EventBus},
+    event::EventBus,
     mappings::FanRef,
     providers::traits::ServiceProvider,
     task_manager::TaskManager,
@@ -65,6 +65,12 @@ pub struct MonitoringBuffer {
     /// Buffer for batch data to be processed.
     pub batch_data: HashMap<u8, Vec<(usize, u8)>>,
     pub temp_data: HashMap<String, f32>,
+}
+
+impl Default for MonitoringBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MonitoringBuffer {
@@ -147,6 +153,7 @@ async fn calculate_fan_speed(
     state: &Arc<AppState>,
 ) -> Result<u8> {
     let curve_registry: &Vec<_> = &state.config().await.curves;
+
     let active_curves = state.active_curves.read().await;
 
     let curve_name = active_curves
@@ -175,7 +182,6 @@ async fn collect_and_process_temperatures(
     _event_bus: &EventBus,
     batch_data: Arc<RwLock<MonitoringBuffer>>,
 ) -> Result<()> {
-
     let mut batch_data = batch_data.write().await;
 
     batch_data.clear();
@@ -186,7 +192,7 @@ async fn collect_and_process_temperatures(
             Ok(temp) => {
                 let sensor_name = sensor.key();
                 batch_data.temp_data.insert(sensor_name.clone(), temp);
-                info!("Temperature of {sensor_name}: {temp:.2}°C");
+                debug!("Temperature of {sensor_name}: {temp:.2}°C");
 
                 for fan in state.mapping.read().await.fans_for_sensor(&sensor_name) {
                     let controller_id = u8::try_from(fan.controller_id).map_err(|_| {
@@ -199,11 +205,11 @@ async fn collect_and_process_temperatures(
                         .await
                         .context("Failed to calculate fan speed")?;
 
-                    batch_data.batch_data.entry(controller_id).or_default().push((
-                        channel as usize,
-                        // temp,
-                        speed,
-                    ));
+                    batch_data
+                        .batch_data
+                        .entry(controller_id)
+                        .or_default()
+                        .push((channel as usize, speed));
                 }
             }
             Err(e) => {
@@ -215,7 +221,9 @@ async fn collect_and_process_temperatures(
     let controllers = state.controllers.read().await;
     controllers
         .batch_update(
-            BatchCommand::SetSpeeds { data: &batch_data.batch_data },
+            BatchCommand::SetSpeeds {
+                data: &batch_data.batch_data,
+            },
             ExecutionMode::Blocking,
         )
         .await
