@@ -5,13 +5,13 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tokio_udev::{AsyncMonitorSocket, EventType, MonitorBuilder};
+use tokio_udev::{AsyncMonitorSocket, Device, EventType, MonitorBuilder};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    app_context::AppState, event::EventBus, providers::traits::ServiceProvider,
-    task_manager::TaskManager,
+    app_context::AppState, drivers::registry::Registry, event::EventBus,
+    providers::traits::ServiceProvider, task_manager::TaskManager,
 };
 
 /// Information about a udev event, safe to send between threads.
@@ -20,9 +20,12 @@ struct UdevEventInfo {
     event_type: EventType,
     devnode: String,
     subsystem: String,
-    vendor_id: Option<String>,
-    product_id: Option<String>,
+    vendor_id: Option<u16>,
+    product_id: Option<u16>,
     serial: Option<String>,
+    // vendor_id: Option<String>,
+    // product_id: Option<String>,
+    // serial: Option<String>,
 }
 
 /// UdevWatcher service provider.
@@ -212,47 +215,40 @@ async fn blocking_udev_monitor(
             Some(event_result) = monitor.next() => {
             match event_result {
                 Ok(event) => {
-                    if let Some(parent) = event.device().parent() {
-                            for attr in parent.attributes() {
-                                info!(
-                                    "UdevWatcher: Device attribute {}: {}",
-                                    attr.name().to_string_lossy(),
-                                    attr.value().to_string_lossy()
-                                );
-                            }
-                            for prop in parent.properties() {
-                                info!(
-                                    "UdevWatcher: Device property {}: {}",
-                                    prop.name().to_string_lossy(),
-                                    prop.value().to_string_lossy()
-                                );
-                            }
-                            info!(
-                                "UdevWatcher: Device params: {}",
-                                get_device_attribute(&parent, "PRODUCT").unwrap_or_else(|| "unknown".to_string())
-                            );
-                    }
-                    let event_info = UdevEventInfo {
-                        event_type: event.event_type(),
-                        devnode: event
-                            .device()
-                            .devnode()
-                            .map(|p| p.to_string_lossy().to_string())
-                            .unwrap_or_else(|| "unknown".to_string()),
-                        subsystem: event
-                            .device()
-                            .subsystem()
-                            .map(|s| s.to_string_lossy().to_string())
-                            .unwrap_or_else(|| "unknown".to_string()),
-                        vendor_id: get_device_attribute(&event.device(), "idVendor"),
-                        product_id: get_device_attribute(&event.device(), "idProduct"),
-                        serial: get_device_attribute(&event.device(), "iSerial"),
-                    };
+                    let (vid, pid, serial) = usb_ids(event.device()).unwrap_or((0, 0, None));
 
-                    // Send event to main async loop
-                    if let Err(e) = event_tx.send(event_info) {
-                        error!("UdevWatcher: Failed to send event to main loop: {}", e);
-                        return Err(anyhow::anyhow!("Failed to send event to main loop"));
+                    if Registry::is_supported_hardware(vid, pid) {
+                        info!(
+                            "UdevWatcher: Supported device detected: VID: {}, PID: {}, serial: {:?}",
+                            vid, pid, serial
+                        );
+                        let event_info = UdevEventInfo {
+                            event_type: event.event_type(),
+                            devnode: event
+                                .device()
+                                .devnode()
+                                .map(|p| p.to_string_lossy().to_string())
+                                .unwrap_or_else(|| "unknown".to_string()),
+                            subsystem: event
+                                .device()
+                                .subsystem()
+                                .map(|s| s.to_string_lossy().to_string())
+                                .unwrap_or_else(|| "unknown".to_string()),
+                            vendor_id: Some(vid),
+                            product_id: Some(pid),
+                            serial,
+                        };
+
+                        // Send event to main async loop
+                        if let Err(e) = event_tx.send(event_info) {
+                            error!("UdevWatcher: Failed to send event to main loop: {}", e);
+                            return Err(anyhow::anyhow!("Failed to send event to main loop"));
+                        }
+                    } else {
+                        info!(
+                            "UdevWatcher: Unsupported device detected: VID: {}, PID: {}, serial: {:?}",
+                            vid, pid, serial
+                        );
                     }
                 }
                 Err(e) => {
@@ -266,6 +262,29 @@ async fn blocking_udev_monitor(
 
     info!("UdevWatcher: Monitor ended");
     Ok(())
+}
+
+fn usb_ids(mut d: Device) -> Option<(u16, u16, Option<String>)> {
+    loop {
+        let vid = d
+            .attribute_value("idVendor")
+            .or_else(|| d.property_value("ID_VENDOR_ID"));
+        let pid = d
+            .attribute_value("idProduct")
+            .or_else(|| d.property_value("ID_MODEL_ID"));
+        let sn = d
+            .property_value("ID_SERIAL_SHORT") // единая короткая строка
+            .or_else(|| d.attribute_value("serial"));
+
+        if let (Some(v), Some(p)) = (vid, pid) {
+            return Some((
+                v.to_string_lossy().into_owned().parse().unwrap_or(0),
+                p.to_string_lossy().into_owned().parse().unwrap_or(0),
+                sn.map(|s| s.to_string_lossy().into_owned()),
+            ));
+        }
+        d = d.parent()?; // поднимаемся, пока не кончились родители
+    }
 }
 
 /// Helper to safely extract device attributes.
@@ -296,12 +315,8 @@ async fn handle_udev_event_info(event_info: UdevEventInfo) {
                 "HID device connected: {} (subsystem: {}, VID: {}, PID: {}, serial: {})",
                 event_info.devnode,
                 event_info.subsystem,
-                event_info
-                    .vendor_id
-                    .unwrap_or_else(|| "unknown".to_string()),
-                event_info
-                    .product_id
-                    .unwrap_or_else(|| "unknown".to_string()),
+                event_info.vendor_id.unwrap_or(0),
+                event_info.product_id.unwrap_or(0),
                 event_info.serial.unwrap_or_else(|| "none".to_string())
             );
         }
@@ -310,12 +325,8 @@ async fn handle_udev_event_info(event_info: UdevEventInfo) {
                 "HID device disconnected: {} (subsystem: {}, VID: {}, PID: {}, serial: {})",
                 event_info.devnode,
                 event_info.subsystem,
-                event_info
-                    .vendor_id
-                    .unwrap_or_else(|| "unknown".to_string()),
-                event_info
-                    .product_id
-                    .unwrap_or_else(|| "unknown".to_string()),
+                event_info.vendor_id.unwrap_or(0),
+                event_info.product_id.unwrap_or(0),
                 event_info.serial.unwrap_or_else(|| "none".to_string())
             );
         }

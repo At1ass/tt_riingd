@@ -74,6 +74,12 @@ impl Registry {
         &SUPPORTED_HARDWARE
     }
 
+    pub fn is_supported_hardware(vid: u16, pid: u16) -> bool {
+        Self::get_supported_hardware()
+            .iter()
+            .any(|hw| hw.vid == vid && hw.pids.contains(&pid))
+    }
+
     /// Scan hardware and merge with existing config
     pub fn merge_with_config(config: &mut Config) {
         debug!("Starting hardware scan and config merge");
