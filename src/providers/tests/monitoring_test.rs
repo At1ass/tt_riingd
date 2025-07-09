@@ -83,11 +83,11 @@ async fn create_mock_app_state() -> Arc<AppState> {
             sensor: "cpu_temp".to_string(),
             targets: vec![
                 FanTarget {
-                    controller: 1,
+                    controller_id: "1".to_string(),
                     fan_idx: 1,
                 },
                 FanTarget {
-                    controller: 1,
+                    controller_id: "1".to_string(),
                     fan_idx: 2,
                 },
             ],
@@ -159,14 +159,14 @@ async fn monitoring_service_multiple_sensors() {
             MappingCfg {
                 sensor: "cpu_temp".to_string(),
                 targets: vec![FanTarget {
-                    controller: 1,
+                    controller_id: "1".to_string(),
                     fan_idx: 1,
                 }],
             },
             MappingCfg {
                 sensor: "gpu_temp".to_string(),
                 targets: vec![FanTarget {
-                    controller: 1,
+                    controller_id: "1".to_string(),
                     fan_idx: 2,
                 }],
             },
@@ -243,7 +243,7 @@ async fn monitoring_service_timing_configuration() {
         mappings: vec![MappingCfg {
             sensor: "cpu_temp".to_string(),
             targets: vec![FanTarget {
-                controller: 1,
+                controller_id: "1".to_string(),
                 fan_idx: 1,
             }],
         }],

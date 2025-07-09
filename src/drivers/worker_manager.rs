@@ -28,10 +28,13 @@ enum ControllerCommand {
     LedCount {
         result_tx: oneshot::Sender<Result<usize>>,
     },
+    Stop {
+        result_tx: oneshot::Sender<Result<()>>,
+    },
 }
 
 struct ControllerWorker {
-    controller_id: u8,
+    controller_id: u32,
     controller: Arc<dyn FanController>,
     command_rx: mpsc::Receiver<ControllerCommand>,
     shutdown_rx: watch::Receiver<bool>,
@@ -74,6 +77,11 @@ impl ControllerWorker {
                             let result = self.controller.led_count();
                             let _ = result_tx.send(Ok(result));
                         }
+                        Some(ControllerCommand::Stop { result_tx }) => {
+                            info!("Stopping controller worker {}", self.controller_id);
+                            let _ = result_tx.send(Ok(()));
+                            break;
+                        }
                         None => {
                             info!("Controller worker {} command channel closed", self.controller_id);
                             break;
@@ -99,10 +107,6 @@ impl ControllerWorker {
         self.controller.update_color_batch(&batch_refs).await
     }
 
-    // async fn handle_init(&self) -> Result<()> {
-    //     self.controller.send_init().await
-    // }
-
     async fn handle_get_firmware(&self) -> Result<(u8, u8, u8)> {
         self.controller.firmware_version().await
     }
@@ -110,9 +114,10 @@ impl ControllerWorker {
 
 #[derive(Debug)]
 pub struct ControllerWorkerManager {
-    workers: HashMap<u8, mpsc::Sender<ControllerCommand>>,
+    workers: HashMap<u32, mpsc::Sender<ControllerCommand>>,
     worker_handles: Vec<JoinHandle<()>>,
     shutdown_tx: watch::Sender<bool>,
+    next_worker_id: u32,
 }
 
 impl ControllerWorkerManager {
@@ -123,12 +128,14 @@ impl ControllerWorkerManager {
             workers: HashMap::new(),
             worker_handles: Vec::new(),
             shutdown_tx,
+            next_worker_id: 1,
         }
     }
 
     pub async fn initialize(&mut self, controllers: Vec<Arc<dyn FanController>>) -> Result<()> {
-        for (index, controller) in controllers.into_iter().enumerate() {
-            let controller_id = (index + 1) as u8;
+        for controller in controllers.into_iter() {
+            let controller_id = self.next_worker_id;
+            self.next_worker_id += 1;
 
             let (command_tx, command_rx) = mpsc::channel(32);
 
@@ -155,11 +162,11 @@ impl ControllerWorkerManager {
         self.workers.len()
     }
 
-    pub async fn send_init(&self, controller_id: u8) -> Result<()> {
+    pub async fn send_init(&self, worker_id: u32) -> Result<()> {
         let worker_tx = self
             .workers
-            .get(&controller_id)
-            .ok_or_else(|| anyhow!("Controller {controller_id} not found"))?;
+            .get(&worker_id)
+            .ok_or_else(|| anyhow!("Controller {worker_id} not found"))?;
 
         let (result_tx, result_rx) = oneshot::channel();
         let command = ControllerCommand::Init { result_tx };
@@ -171,13 +178,13 @@ impl ControllerWorkerManager {
 
     pub async fn set_colors(
         &self,
-        controller_id: u8,
+        worker_id: u32,
         colors: &[ColorBufferForSend<'_>],
     ) -> Result<()> {
         let worker_tx = self
             .workers
-            .get(&controller_id)
-            .ok_or_else(|| anyhow!("Controller {controller_id} not found"))?;
+            .get(&worker_id)
+            .ok_or_else(|| anyhow!("Controller {worker_id} not found"))?;
 
         let (result_tx, result_rx) = oneshot::channel();
         let command = ControllerCommand::SetColors {
@@ -193,11 +200,11 @@ impl ControllerWorkerManager {
         result_rx.await?
     }
 
-    pub async fn set_speeds(&self, controller_id: u8, speeds: &[(usize, u8)]) -> Result<()> {
+    pub async fn set_speeds(&self, worker_id: u32, speeds: &[(usize, u8)]) -> Result<()> {
         let worker_tx = self
             .workers
-            .get(&controller_id)
-            .ok_or_else(|| anyhow!("Controller {controller_id} not found"))?;
+            .get(&worker_id)
+            .ok_or_else(|| anyhow!("Controller {worker_id} not found"))?;
 
         let (result_tx, result_rx) = oneshot::channel();
         let command = ControllerCommand::SetSpeeds {
@@ -210,8 +217,8 @@ impl ControllerWorkerManager {
         result_rx.await?
     }
 
-    pub fn try_set_colors(&self, controller_id: u8, colors: &[ColorBufferForSend<'_>]) -> bool {
-        if let Some(worker_tx) = self.workers.get(&controller_id) {
+    pub fn try_set_colors(&self, worker_id: u32, colors: &[ColorBufferForSend<'_>]) -> bool {
+        if let Some(worker_tx) = self.workers.get(&worker_id) {
             let (result_tx, _) = oneshot::channel();
             let command = ControllerCommand::SetColors {
                 data: colors
@@ -227,8 +234,8 @@ impl ControllerWorkerManager {
         }
     }
 
-    pub fn try_set_speeds(&self, controller_id: u8, speeds: &[(usize, u8)]) -> bool {
-        if let Some(worker_tx) = self.workers.get(&controller_id) {
+    pub fn try_set_speeds(&self, worker_id: u32, speeds: &[(usize, u8)]) -> bool {
+        if let Some(worker_tx) = self.workers.get(&worker_id) {
             let (result_tx, _) = oneshot::channel();
             let command = ControllerCommand::SetSpeeds {
                 data: speeds.to_vec(),
@@ -254,11 +261,49 @@ impl ControllerWorkerManager {
         self.workers.clear();
     }
 
-    pub async fn get_firmware(&self, controller: u8) -> Result<(u8, u8, u8)> {
+    pub async fn stop_worker(&mut self, worker_id: u32) -> Result<()> {
+        if let Some(worker_tx) = self.workers.get(&worker_id) {
+            let (result_tx, result_rx) = oneshot::channel();
+            let command = ControllerCommand::Stop { result_tx };
+
+            worker_tx.send(command).await?;
+
+            info!("Stopped worker for controller {}", worker_id);
+            result_rx.await?
+        } else {
+            Err(anyhow!("Controller {worker_id} not found"))
+        }
+    }
+
+    pub async fn start_worker(&mut self, controller: Arc<dyn FanController>) -> Result<u32> {
+        let controller_id = self.next_worker_id;
+        self.next_worker_id += 1;
+
+        let (command_tx, command_rx) = mpsc::channel(32);
+
+        let worker = ControllerWorker {
+            controller_id,
+            controller,
+            command_rx,
+            shutdown_rx: self.shutdown_tx.subscribe(),
+        };
+
+        let handle = tokio::spawn(async move {
+            worker.run().await;
+        });
+
+        self.workers.insert(controller_id, command_tx);
+        self.worker_handles.push(handle);
+
+        info!("Initialized {} controller workers", self.workers.len());
+        Ok(controller_id)
+    }
+
+    pub async fn get_firmware(&self, worker_id: u32) -> Result<(u8, u8, u8)> {
         let worker_tx = self
             .workers
-            .get(&controller)
-            .ok_or_else(|| anyhow!("Controller {controller} not found"))?;
+            .get(&worker_id)
+            .ok_or_else(|| anyhow!("Controller {worker_id} not found"))?;
 
         let (result_tx, result_rx) = oneshot::channel();
         let command = ControllerCommand::GetFirmware { result_tx };
@@ -268,11 +313,11 @@ impl ControllerWorkerManager {
         result_rx.await?
     }
 
-    pub async fn led_count(&self, controller: u8) -> Result<usize> {
+    pub async fn led_count(&self, worker_id: u32) -> Result<usize> {
         let worker_tx = self
             .workers
-            .get(&controller)
-            .ok_or_else(|| anyhow!("Controller {controller} not found"))?;
+            .get(&worker_id)
+            .ok_or_else(|| anyhow!("Controller {worker_id} not found"))?;
 
         let (result_tx, result_rx) = oneshot::channel();
         let command = ControllerCommand::LedCount { result_tx };

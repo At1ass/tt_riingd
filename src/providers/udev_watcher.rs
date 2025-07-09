@@ -20,8 +20,8 @@ struct UdevEventInfo {
     event_type: EventType,
     devnode: String,
     subsystem: String,
-    vendor_id: Option<u16>,
-    product_id: Option<u16>,
+    vendor_id: u16,
+    product_id: u16,
     serial: Option<String>,
     // vendor_id: Option<String>,
     // product_id: Option<String>,
@@ -125,7 +125,7 @@ impl ServiceProvider for UdevWatcherServiceProvider {
 /// - No state lost on cancellation
 async fn run_udev_watcher_service(
     _state: Arc<AppState>,
-    _event_bus: EventBus,
+    event_bus: EventBus,
     cancel_token: CancellationToken,
 ) -> Result<()> {
     info!("UdevWatcher: Starting HID device monitoring");
@@ -161,7 +161,7 @@ async fn run_udev_watcher_service(
             event_info = event_rx.recv() => {
                 match event_info {
                     Some(event_info) => {
-                        handle_udev_event_info(event_info).await;
+                        handle_udev_event_info(event_info, &event_bus).await;
                     }
                     None => {
                         warn!("UdevWatcher: Event channel closed, monitoring thread ended");
@@ -234,8 +234,8 @@ async fn blocking_udev_monitor(
                                 .subsystem()
                                 .map(|s| s.to_string_lossy().to_string())
                                 .unwrap_or_else(|| "unknown".to_string()),
-                            vendor_id: Some(vid),
-                            product_id: Some(pid),
+                            vendor_id: vid,
+                            product_id: pid,
                             serial,
                         };
 
@@ -287,48 +287,53 @@ fn usb_ids(mut d: Device) -> Option<(u16, u16, Option<String>)> {
     }
 }
 
-/// Helper to safely extract device attributes.
-fn get_device_attribute(device: &tokio_udev::Device, attr_name: &str) -> Option<String> {
-    if let Some(a) = device.parent() {
-        let aa = a.attribute_value(attr_name);
-
-        info!(
-            "UdevWatcher: Extracting attribute '{}' from device: {:?}",
-            attr_name, aa
-        );
-
-        aa.and_then(|val| val.to_str()).map(|s| s.to_string())
-    } else {
-        None
-    }
-}
-
 /// Handles udev event information.
 ///
 /// Currently only logs events for debugging. Will be extended to:
 /// - Filter for supported devices
 /// - Publish events to EventBus
-async fn handle_udev_event_info(event_info: UdevEventInfo) {
+async fn handle_udev_event_info(event_info: UdevEventInfo, event_bus: &EventBus) {
     match event_info.event_type {
         EventType::Add => {
             info!(
                 "HID device connected: {} (subsystem: {}, VID: {}, PID: {}, serial: {})",
                 event_info.devnode,
                 event_info.subsystem,
-                event_info.vendor_id.unwrap_or(0),
-                event_info.product_id.unwrap_or(0),
-                event_info.serial.unwrap_or_else(|| "none".to_string())
+                event_info.vendor_id,
+                event_info.product_id,
+                event_info
+                    .serial
+                    .clone()
+                    .unwrap_or_else(|| "none".to_string())
             );
+
+            if let Err(e) = event_bus.publish(crate::event::Event::DeviceConnected {
+                vendor_id: event_info.vendor_id,
+                product_id: event_info.product_id,
+                serial_number: event_info.serial,
+            }) {
+                error!("Failed to publish HID device added event: {}", e);
+            }
         }
         EventType::Remove => {
             info!(
                 "HID device disconnected: {} (subsystem: {}, VID: {}, PID: {}, serial: {})",
                 event_info.devnode,
                 event_info.subsystem,
-                event_info.vendor_id.unwrap_or(0),
-                event_info.product_id.unwrap_or(0),
-                event_info.serial.unwrap_or_else(|| "none".to_string())
+                event_info.vendor_id,
+                event_info.product_id,
+                event_info
+                    .serial
+                    .clone()
+                    .unwrap_or_else(|| "none".to_string())
             );
+            if let Err(e) = event_bus.publish(crate::event::Event::DeviceDisconnected {
+                vendor_id: event_info.vendor_id,
+                product_id: event_info.product_id,
+                serial_number: event_info.serial,
+            }) {
+                error!("Failed to publish HID device added event: {}", e);
+            }
         }
         EventType::Change => {
             debug!(

@@ -101,13 +101,13 @@ sensors:
 mappings:
   - sensor: "cpu_temp"
     targets:
-      - controller: 1
+      - controller_id: "1"
         fan_idx: 1
 
 active_curve_mappings:
   - curve: "constant_50"
     targets:
-      - controller: 1
+      - controller_id: "1"
         fan_idx: 1
 
 effects:
@@ -118,7 +118,7 @@ effects:
 effect_mappings:
   - effect: "red"
     targets:
-      - controller: 1
+      - controller_id: "1"
         fan_idx: 1
 "#
     }
@@ -603,8 +603,8 @@ mod property_tests {
 
         #[test]
         fn test_fan_target_valid_indices(controller in 1u8..=255, fan_idx in 1u8..=255) {
-            let target = FanTarget { controller, fan_idx };
-            assert_eq!(target.controller, controller);
+            let target = FanTarget { controller_id: controller.to_string(), fan_idx };
+            assert_eq!(target.controller_id, controller.to_string());
             assert_eq!(target.fan_idx, fan_idx);
         }
 

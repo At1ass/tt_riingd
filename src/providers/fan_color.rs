@@ -60,7 +60,8 @@ pub struct FanColorControlServiceProvider {
 }
 
 type ControllerColorBuffer = Vec<(usize, Vec<(u8, u8, u8)>)>;
-type ConrollerId = u8;
+// type ConrollerId = u8;
+type ConrollerId = String;
 type Buffer = HashMap<ConrollerId, ControllerColorBuffer>;
 
 struct DoubleBuffer {
@@ -204,7 +205,9 @@ async fn calculate_fan_colors(
         let instance = runner.value();
         if let Some(rgb) = instance.runner.next_rgb().await {
             for fan_ref in &instance.targets {
-                let buf = write_buffer.entry(fan_ref.controller_id as u8).or_default();
+                let buf = write_buffer
+                    .entry(fan_ref.controller_id.clone())
+                    .or_default();
 
                 if !buf
                     .iter_mut()
@@ -214,7 +217,7 @@ async fn calculate_fan_colors(
                         .controllers
                         .read()
                         .await
-                        .led_count(fan_ref.controller_id as u8)
+                        .led_count(&fan_ref.controller_id)
                         .await
                     {
                         buf.push((fan_ref.channel, vec![(0, 0, 0); led]));

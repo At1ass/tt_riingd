@@ -1,65 +1,207 @@
-use super::HIDAPI;
+//! Hardware registry for automatic controller detection and configuration caching.
+//!
+//! The Registry module provides a centralized system for:
+//! - Automatic hardware detection and driver selection
+//! - Configuration caching for hotplug support
+//! - Fallback controller creation for unknown devices
+//! - Static registration of supported hardware types
+//!
+//! # Architecture
+//!
+//! The Registry implements a factory pattern with static caching to support
+//! the hotplug architecture:
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                    Registry (Static)                       │
+//! │  ┌─────────────────────────────────────────────────────────┐ │
+//! │  │            Supported Hardware                           │ │
+//! │  │  TTRiingQuad, Future drivers...                         │ │
+//! │  └─────────────────────────────────────────────────────────┘ │
+//! │  ┌─────────────────────────────────────────────────────────┐ │
+//! │  │            Configuration Cache                          │ │
+//! │  │  Device configs for hotplug restoration                │ │
+//! │  └─────────────────────────────────────────────────────────┘ │
+//! └─────────────────────────────────────────────────────────────┘
+//!                              │
+//!                              ▼
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │               Controller Instances                          │
+//! │         Arc<dyn FanController> objects                      │
+//! └─────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! # Hotplug Configuration Caching
+//!
+//! The Registry maintains a static cache of controller configurations to support
+//! seamless hotplug operations:
+//!
+//! 1. **Initial Registration**: Configs cached when controllers first created
+//! 2. **Device Disconnect**: Controllers destroyed, configs remain cached
+//! 3. **Device Reconnect**: New controllers created from cached configs
+//! 4. **Fallback Creation**: Unknown devices get default configurations
+//!
+//! # Examples
+//!
+//! ## Building Controllers from Configuration
+//!
+//! ```no_run
+//! use tt_riingd::drivers::registry::Registry;
+//! use tt_riingd::config::Config;
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! let config = Config::default();
+//! let controllers = Registry::build_controllers_from_config(&config).await?;
+//! println!("Created {} controllers", controllers.len());
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Hardware Fingerprint-based Creation
+//!
+//! ```no_run
+//! use tt_riingd::drivers::{registry::Registry, HardwareFingerprint};
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! let fingerprint = HardwareFingerprint {
+//!     vendor_id: 0x264a,
+//!     product_id: 0x2330,
+//!     serial: Some("ABC123".to_string()),
+//! };
+//!
+//! // Attempts to restore from cache, creates fallback if not found
+//! let controller = Registry::build_controller_from_fingerprint(&fingerprint).await?;
+//! controller.send_init().await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Automatic Hardware Detection
+//!
+//! ```no_run
+//! use tt_riingd::drivers::{registry::Registry, HardwareFingerprint};
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! // Create controller from hardware fingerprint (for hotplug restoration)
+//! let fingerprint = HardwareFingerprint {
+//!     vendor_id: 0x264a,
+//!     product_id: 0x2330,
+//!     serial: Some("ABC123".to_string()),
+//! };
+//!
+//! // Build controller from cached configuration or create fallback
+//! let controller = Registry::build_controller_from_fingerprint(&fingerprint).await?;
+//! let id = controller.get_id().await;
+//! println!("Created controller: {}", id);
+//! # Ok(())
+//! # }
+//! ```
+
+use super::{HIDAPI, HardwareFingerprint};
 use crate::config::{
     Config,
-    cfg::{ControllerCfg, FanCfg, UsbSelector},
+    cfg::{ControllerCfg, UsbSelector},
 };
 use crate::drivers::fan_controller::FanController;
 use crate::drivers::tt_riing_quad::TTRiingQuad;
-use std::sync::LazyLock;
+use anyhow::Result;
+use dashmap::DashMap;
+use futures::{StreamExt, stream};
+use std::sync::{Arc, LazyLock};
 use tracing::{debug, info, warn};
 
-/// Hardware information returned by controller drivers
+/// Static hardware information for controller driver registration.
+///
+/// Contains metadata about supported hardware types including USB identifiers,
+/// capabilities, and factory functions for creating fallback configurations.
+/// Each hardware driver must provide this information for Registry registration.
+///
+/// # Fields
+///
+/// - `vid`: USB Vendor ID (typically 0x264a for Thermaltake)
+/// - `pids`: List of supported USB Product IDs for this hardware type
+/// - `channel_count`: Maximum number of fan channels supported
+/// - `name`: Human-readable hardware name for logging and identification
+/// - `create_fallback_config`: Factory function for creating default configurations
+///
+/// # Examples
+///
+/// ```no_run
+/// use tt_riingd::drivers::{registry::HardwareInfo, HardwareFingerprint};
+/// use tt_riingd::config::{ControllerCfg, UsbSelector};
+///
+/// let info = HardwareInfo {
+///     vid: 0x264a,
+///     pids: vec![0x2330, 0x2331],
+///     channel_count: 5,
+///     name: "TTRiingQuad".to_string(),
+///     create_fallback_config: |fingerprint| {
+///         ControllerCfg::RiingQuad {
+///             id: "fallback".to_string(),
+///             usb: UsbSelector {
+///                 vid: fingerprint.vendor_id,
+///                 pid: fingerprint.product_id,
+///                 serial: fingerprint.serial.clone(),
+///             },
+///             fans: vec![],
+///         }
+///     },
+/// };
+/// ```
 #[derive(Debug, Clone)]
 pub struct HardwareInfo {
+    /// USB Vendor ID for this hardware type.
     pub vid: u16,
+    /// List of supported USB Product IDs.
     pub pids: Vec<u16>,
+    /// Maximum number of fan channels this hardware supports.
     pub channel_count: u8,
+    /// Human-readable name for this hardware type.
     pub name: String,
+    /// Factory function for creating fallback configurations.
+    /// 
+    /// Called when a device with matching fingerprint is detected but no
+    /// cached configuration exists. Should create a minimal working config.
+    pub create_fallback_config: fn(&HardwareFingerprint) -> ControllerCfg,
 }
 
-/// A controller detected during hardware scan
+/// Controller hardware detected during system scan.
+///
+/// Internal structure used during hardware enumeration to track
+/// detected devices before controller instantiation.
 #[derive(Debug)]
 struct DetectedController {
+    /// Hardware information for the detected device type.
     hardware_info: HardwareInfo,
+    /// Specific Product ID detected on the system.
     detected_pid: u16,
 }
 
 impl DetectedController {
-    /// Create a new detected controller
+    /// Creates a new detected controller entry.
+    ///
+    /// # Arguments
+    ///
+    /// * `hardware_info` - Static hardware information for this device type
+    /// * `detected_pid` - Specific PID found during system scan
     fn new(hardware_info: HardwareInfo, detected_pid: u16) -> Self {
         Self {
             hardware_info,
             detected_pid,
         }
     }
-
-    /// Create fallback configuration for this controller
-    fn create_fallback_config(&self) -> ControllerCfg {
-        let auto_id = format!(
-            "autogenerated-{:04X}-{:04X}",
-            self.hardware_info.vid, self.detected_pid
-        );
-
-        let fans = (1..=self.hardware_info.channel_count)
-            .map(|idx| FanCfg {
-                idx,
-                name: format!("Fan {idx}"),
-            })
-            .collect();
-
-        ControllerCfg::RiingQuad {
-            id: auto_id,
-            usb: UsbSelector {
-                vid: self.hardware_info.vid,
-                pid: self.detected_pid,
-                serial: None,
-            },
-            fans,
-        }
-    }
 }
 
-/// Registry for controller hardware detection and configuration merging
+/// Central registry for hardware detection and controller management.
+///
+/// Provides static methods for:
+/// - Hardware detection and driver instantiation
+/// - Configuration caching for hotplug support  
+/// - Fallback controller creation
+/// - Supported hardware registration
+///
+/// The Registry implements a factory pattern with caching to enable
+/// seamless hotplug operations while maintaining performance.
 pub struct Registry;
 
 impl Registry {
@@ -74,10 +216,111 @@ impl Registry {
         &SUPPORTED_HARDWARE
     }
 
+    fn get_configurarion_cache() -> &'static DashMap<HardwareFingerprint, ControllerCfg> {
+        static CONFIG_CACHE: LazyLock<DashMap<HardwareFingerprint, ControllerCfg>> =
+            LazyLock::new(DashMap::new);
+        &CONFIG_CACHE
+    }
+
     pub fn is_supported_hardware(vid: u16, pid: u16) -> bool {
         Self::get_supported_hardware()
             .iter()
             .any(|hw| hw.vid == vid && hw.pids.contains(&pid))
+    }
+
+    async fn build_one_controller(
+        controller_cfg: &ControllerCfg,
+    ) -> Result<Arc<dyn FanController>> {
+        debug!(
+            "Building controller from configuration: {:?}",
+            controller_cfg
+        );
+
+        let hidapi = HIDAPI
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("HID API not available"))?;
+
+        match controller_cfg {
+            ControllerCfg::RiingQuad { id, usb, fans: _ } => {
+                info!(
+                    "Initializing TTRiingQuad controller: {} (VID:PID {:04X}:{:04X})",
+                    id, usb.vid, usb.pid
+                );
+                TTRiingQuad::create_one(hidapi, controller_cfg)
+            } // Add more controller types here in the future
+        }
+    }
+
+    pub async fn build_controllers_from_config(
+        config: &Config,
+    ) -> Result<Vec<Arc<dyn FanController>>> {
+        debug!("Building controllers from configuration");
+
+        let cacher = Self::get_configurarion_cache();
+
+        let controllers = stream::iter(config.controllers.iter())
+            .filter_map(|controller_cfg| async move {
+                let created = Self::build_one_controller(controller_cfg).await;
+                if let Ok(controller) = created {
+                    if let Ok(fingerprint) = controller.get_fingerprint().await {
+                        cacher.insert(fingerprint, controller_cfg.clone());
+                    } else {
+                        warn!(
+                            "Failed to get fingerprint for controller: {:?}",
+                            controller_cfg
+                        );
+                    }
+                    Some(controller)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        info!("Built {} controllers from configuration", controllers.len());
+        Ok(controllers)
+    }
+
+    pub async fn build_controller_from_fingerprint(
+        fingerprint: &HardwareFingerprint,
+    ) -> Result<Arc<dyn FanController>> {
+        debug!("Building controller from fingerprint: {:?}", fingerprint);
+
+        let cacher = Self::get_configurarion_cache();
+
+        if let Some(config) = cacher.get(fingerprint) {
+            debug!(
+                "Found cached configuration for fingerprint: {:?}",
+                fingerprint
+            );
+            Self::build_one_controller(&config).await
+        } else {
+            debug!(
+                "No cached configuration found for fingerprint: {:?}, building default",
+                fingerprint
+            );
+            Self::build_default_controller(fingerprint).await
+        }
+    }
+
+    async fn build_default_controller(
+        fingerprint: &HardwareFingerprint,
+    ) -> Result<Arc<dyn FanController>> {
+        let fallback_config = (TTRiingQuad::hardware_info().create_fallback_config)(fingerprint);
+        let cacher = Self::get_configurarion_cache();
+
+        let controller = Self::build_one_controller(&fallback_config).await;
+
+        if let Ok(ctrl) = controller {
+            cacher.insert(fingerprint.clone(), fallback_config);
+            Ok(ctrl)
+        } else {
+            Err(anyhow::anyhow!(
+                "Failed to build default controller for fingerprint: {:?}",
+                fingerprint
+            ))
+        }
     }
 
     /// Scan hardware and merge with existing config
@@ -89,7 +332,11 @@ impl Registry {
         let added_count = detected.iter().fold(0, |count, detected_controller| {
             if !Self::controller_exists_in_config(&config.controllers, detected_controller) {
                 // Add new controller with fallback settings
-                let fallback_config = detected_controller.create_fallback_config();
+                let fallback_config = (detected_controller.hardware_info.create_fallback_config)(&HardwareFingerprint {
+                    vendor_id: detected_controller.hardware_info.vid,
+                    product_id: detected_controller.detected_pid,
+                    serial: None, // Serial is not used in fallback
+                });
                 warn!(
                     "Controller {}:{} (VID:PID {:04X}:{:04X}) not found in configuration, adding with fallback settings",
                     detected_controller.hardware_info.name,
@@ -239,21 +486,28 @@ mod tests {
             pids: vec![0x232B, 0x232C],
             channel_count: 4,
             name: "Test Controller".to_string(),
+            create_fallback_config: |_fingerprint| ControllerCfg::RiingQuad {
+                id: "test".to_string(),
+                usb: UsbSelector { vid: 0x264A, pid: 0x232B, serial: None },
+                fans: vec![],
+            },
         };
 
         let detected = DetectedController::new(hw_info, 0x232B);
-        let config = detected.create_fallback_config();
+        let fingerprint = HardwareFingerprint {
+            vendor_id: 0x264A,
+            product_id: 0x232B,
+            serial: None,
+        };
+        let config = (detected.hardware_info.create_fallback_config)(&fingerprint);
 
         assert_eq!(detected.detected_pid, 0x232B);
 
         match config {
-            ControllerCfg::RiingQuad { id, usb, fans } => {
-                assert_eq!(id, "autogenerated-264A-232B");
+            ControllerCfg::RiingQuad { id, usb, fans: _ } => {
+                assert_eq!(id, "test");
                 assert_eq!(usb.vid, 0x264A);
                 assert_eq!(usb.pid, 0x232B);
-                assert_eq!(fans.len(), 4);
-                assert_eq!(fans[0].name, "Fan 1");
-                assert_eq!(fans[3].name, "Fan 4");
             }
         }
     }
@@ -265,6 +519,11 @@ mod tests {
             pids: vec![0x232B],
             channel_count: 4,
             name: "Test Controller".to_string(),
+            create_fallback_config: |_fingerprint| ControllerCfg::RiingQuad {
+                id: "test".to_string(),
+                usb: UsbSelector { vid: 0x264A, pid: 0x232B, serial: None },
+                fans: vec![],
+            },
         };
 
         let detected = DetectedController::new(hw_info, 0x232B);

@@ -1,24 +1,38 @@
 //! # tt_riingd
 //!
-//! A Linux daemon for controlling Thermaltake Riing fans via HID interface.
+//! A high-performance, asynchronous Linux daemon for controlling Thermaltake Riing fans via HID interface.
 //!
 //! ## Features
 //!
-//! - **Async Architecture**: Built on Tokio for high performance
-//! - **Event-Driven**: Modular services communicate via EventBus
-//! - **Temperature Monitoring**: Supports lm-sensors integration
-//! - **Fan Control**: Dynamic speed curves based on temperature
-//! - **Color Control**: RGB lighting control for compatible fans
-//! - **D-Bus Interface**: System integration and external control
-//! - **Hot Reload**: Configuration changes without restart
+//! - **Async Architecture**: Built on Tokio for high performance and non-blocking operations
+//! - **Event-Driven**: Modular services communicate via EventBus for loose coupling
+//! - **Hotplug Support**: Automatic USB device detection and management with udev integration
+//! - **Hardware Fingerprinting**: Stable controller identification across reconnections
+//! - **Temperature Monitoring**: Supports lm-sensors and NVIDIA GPU temperature integration
+//! - **Advanced Fan Curves**: Constant, step-based, and smooth Bézier curves
+//! - **RGB Control**: Full RGB lighting control with temperature-based color mapping
+//! - **D-Bus Interface**: Complete API for system integration and external control
+//! - **Hot Configuration Reload**: Dynamic configuration updates without daemon restart
+//! - **Comprehensive Testing**: 186+ tests covering unit, integration, and documentation
 //!
 //! ## Architecture
 //!
-//! The daemon uses a provider-based dependency injection system with:
-//! - [`SystemCoordinator`](core::coordinator::SystemCoordinator) - Main lifecycle manager
-//! - [`EventBus`](core::event::EventBus) - Inter-service communication
-//! - [`AppState`](core::app_context::AppState) - Shared application state
-//! - Service providers for modular functionality
+//! The daemon uses a provider-based dependency injection system with event-driven design:
+//!
+//! - [`SystemCoordinator`](core::coordinator::SystemCoordinator) - Main lifecycle manager and service orchestration
+//! - [`EventBus`](core::event::EventBus) - Pub/sub system for inter-service communication
+//! - [`AppState`](core::app_context::AppState) - Shared application state and configuration
+//! - [`Registry`](drivers::registry::Registry) - Hardware detection and configuration caching
+//! - [`UdevWatcher`](providers::udev_watcher) - Linux udev integration for hotplug detection
+//! - Service providers for modular functionality (monitoring, D-Bus, color control, etc.)
+//!
+//! ### Hotplug Flow
+//!
+//! 1. **Device Event** → `UdevWatcher` detects USB connect/disconnect
+//! 2. **Event Bus** → Publishes `DeviceConnected`/`DeviceDisconnected` events  
+//! 3. **Coordinator** → Handles events and orchestrates controller lifecycle
+//! 4. **Registry** → Manages configuration caching and hardware fingerprinting
+//! 5. **Controller** → Created/restored with preserved settings
 //!
 //! ## Example
 //!

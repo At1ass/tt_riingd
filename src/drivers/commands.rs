@@ -5,10 +5,10 @@ use super::ControllerColorBuffer;
 #[derive(Debug)]
 pub enum BatchCommand<'a> {
     SetColors {
-        data: &'a HashMap<u8, ControllerColorBuffer>,
+        data: &'a HashMap<String, ControllerColorBuffer>,
     },
     SetSpeeds {
-        data: &'a HashMap<u8, Vec<(usize, u8)>>,
+        data: &'a HashMap<String, Vec<(usize, u8)>>,
     },
     Init,
     GetFirmwares,
@@ -21,7 +21,7 @@ pub enum BatchResult {
     ControllersInitialized(ControllerBatchStats),
     FirmwareRetrieved {
         stats: ControllerBatchStats,
-        firmware_data: Vec<(u8, (u8, u8, u8))>,
+        firmware_data: Vec<(String, (u8, u8, u8))>,
     },
 }
 
@@ -30,7 +30,7 @@ pub struct ControllerBatchStats {
     pub total: usize,
     pub successful: usize,
     pub failed: usize,
-    pub failed_controllers: Vec<u8>,
+    pub failed_controllers: Vec<String>,
 }
 
 #[derive(Debug, Clone)]

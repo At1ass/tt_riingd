@@ -63,7 +63,7 @@ impl MonitoringServiceProvider {
 
 pub struct MonitoringBuffer {
     /// Buffer for batch data to be processed.
-    pub batch_data: HashMap<u8, Vec<(usize, u8)>>,
+    pub batch_data: HashMap<String, Vec<(usize, u8)>>,
     pub temp_data: HashMap<String, f32>,
 }
 
@@ -147,7 +147,7 @@ async fn run_monitoring_service(
 }
 
 async fn calculate_fan_speed(
-    controller_id: u8,
+    controller_id: &String,
     channel: u8,
     temp: f32,
     state: &Arc<AppState>,
@@ -158,7 +158,7 @@ async fn calculate_fan_speed(
 
     let curve_name = active_curves
         .get_curve_for_fan(&FanRef {
-            controller_id: controller_id as usize,
+            controller_id: controller_id.clone(),
             channel: channel as usize,
         })
         .ok_or_else(|| {
@@ -194,10 +194,9 @@ async fn collect_and_process_temperatures(
                 batch_data.temp_data.insert(sensor_name.clone(), temp);
                 debug!("Temperature of {sensor_name}: {temp:.2}°C");
 
+                // let batch_data = batch_data.batch_data.entry(controller_id.clone()).or_default();
                 for fan in state.mapping.read().await.fans_for_sensor(&sensor_name) {
-                    let controller_id = u8::try_from(fan.controller_id).map_err(|_| {
-                        anyhow::anyhow!("Controller ID {} too large for u8", fan.controller_id)
-                    })?;
+                    let controller_id = &fan.controller_id;
                     let channel = u8::try_from(fan.channel)
                         .map_err(|_| anyhow::anyhow!("Channel {} too large for u8", fan.channel))?;
 
@@ -205,11 +204,16 @@ async fn collect_and_process_temperatures(
                         .await
                         .context("Failed to calculate fan speed")?;
 
-                    batch_data
-                        .batch_data
-                        .entry(controller_id)
-                        .or_default()
-                        .push((channel as usize, speed));
+                    if let Some(entry) = batch_data.batch_data.get_mut(controller_id) {
+                        entry.push((channel as usize, speed));
+                    } else {
+                        // If the controller is not in the batch data, create a new entry
+                        batch_data
+                            .batch_data
+                            .entry(controller_id.clone())
+                            .or_default()
+                            .push((channel as usize, speed));
+                    }
                 }
             }
             Err(e) => {

@@ -27,6 +27,22 @@ pub enum Event {
     ConfigChangeDetected(ConfigChangeType),
     SystemShutdown,
     TemperatureChanged(HashMap<String, f32>),
+    DeviceConnected {
+        /// Device identifier
+        vendor_id: u16,
+        /// Device type (e.g., "sensor", "actuator")
+        product_id: u16,
+        /// Optional serial number for the device
+        serial_number: Option<String>,
+    },
+    DeviceDisconnected {
+        /// Device identifier
+        vendor_id: u16,
+        /// Device type (e.g., "sensor", "actuator")
+        product_id: u16,
+        /// Optional serial number for the device
+        serial_number: Option<String>,
+    },
     ColorChanged,
 }
 

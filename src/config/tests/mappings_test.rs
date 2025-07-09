@@ -28,13 +28,13 @@ fn color_for_temp(
 fn resolve_mappings(
     temperatures: &HashMap<String, f32>,
     mappings: &[MappingCfg],
-) -> HashMap<(u8, u8), f32> {
+) -> HashMap<(String, u8), f32> {
     let mut result = HashMap::new();
 
     for mapping in mappings {
         if let Some(&temp) = temperatures.get(&mapping.sensor) {
             for target in &mapping.targets {
-                let key = (target.controller, target.fan_idx);
+                let key = (target.controller_id.clone(), target.fan_idx);
                 result.insert(key, temp);
             }
         }
@@ -143,7 +143,7 @@ fn resolve_mappings_single_sensor_single_target() {
     let mappings = vec![MappingCfg {
         sensor: "cpu_temp".to_string(),
         targets: vec![FanTarget {
-            controller: 0,
+            controller_id: "0".to_string(),
             fan_idx: 1,
         }],
     }];
@@ -151,7 +151,7 @@ fn resolve_mappings_single_sensor_single_target() {
     let result = resolve_mappings(&temperatures, &mappings);
 
     std::assert_eq!(result.len(), 1);
-    std::assert_eq!(result.get(&(0, 1)), Some(&65.0));
+    std::assert_eq!(result.get(&("0".to_string(), 1)), Some(&65.0));
 }
 
 #[test]
@@ -163,15 +163,15 @@ fn resolve_mappings_single_sensor_multiple_targets() {
         sensor: "cpu_temp".to_string(),
         targets: vec![
             FanTarget {
-                controller: 0,
+                controller_id: "0".to_string(),
                 fan_idx: 1,
             },
             FanTarget {
-                controller: 0,
+                controller_id: "0".to_string(),
                 fan_idx: 2,
             },
             FanTarget {
-                controller: 1,
+                controller_id: "1".to_string(),
                 fan_idx: 1,
             },
         ],
@@ -180,9 +180,9 @@ fn resolve_mappings_single_sensor_multiple_targets() {
     let result = resolve_mappings(&temperatures, &mappings);
 
     std::assert_eq!(result.len(), 3);
-    std::assert_eq!(result.get(&(0, 1)), Some(&72.5));
-    std::assert_eq!(result.get(&(0, 2)), Some(&72.5));
-    std::assert_eq!(result.get(&(1, 1)), Some(&72.5));
+    std::assert_eq!(result.get(&("0".to_string(), 1)), Some(&72.5));
+    std::assert_eq!(result.get(&("0".to_string(), 2)), Some(&72.5));
+    std::assert_eq!(result.get(&("1".to_string(), 1)), Some(&72.5));
 }
 
 #[test]
@@ -195,14 +195,14 @@ fn resolve_mappings_multiple_sensors() {
         MappingCfg {
             sensor: "cpu_temp".to_string(),
             targets: vec![FanTarget {
-                controller: 0,
+                controller_id: "0".to_string(),
                 fan_idx: 1,
             }],
         },
         MappingCfg {
             sensor: "gpu_temp".to_string(),
             targets: vec![FanTarget {
-                controller: 0,
+                controller_id: "0".to_string(),
                 fan_idx: 2,
             }],
         },
@@ -211,8 +211,8 @@ fn resolve_mappings_multiple_sensors() {
     let result = resolve_mappings(&temperatures, &mappings);
 
     std::assert_eq!(result.len(), 2);
-    std::assert_eq!(result.get(&(0, 1)), Some(&65.0));
-    std::assert_eq!(result.get(&(0, 2)), Some(&78.0));
+    std::assert_eq!(result.get(&("0".to_string(), 1)), Some(&65.0));
+    std::assert_eq!(result.get(&("0".to_string(), 2)), Some(&78.0));
 }
 
 #[test]
@@ -222,7 +222,7 @@ fn resolve_mappings_missing_sensor() {
     let mappings = vec![MappingCfg {
         sensor: "nonexistent_sensor".to_string(),
         targets: vec![FanTarget {
-            controller: 0,
+            controller_id: "0".to_string(),
             fan_idx: 1,
         }],
     }];
@@ -243,7 +243,7 @@ fn resolve_mappings_overlapping_targets() {
         MappingCfg {
             sensor: "cpu_temp".to_string(),
             targets: vec![FanTarget {
-                controller: 0,
+                controller_id: "0".to_string(),
                 fan_idx: 1,
             }],
         },
@@ -251,7 +251,7 @@ fn resolve_mappings_overlapping_targets() {
             sensor: "gpu_temp".to_string(),
             targets: vec![
                 FanTarget {
-                    controller: 0,
+                    controller_id: "0".to_string(),
                     fan_idx: 1,
                 }, // Same target as CPU
             ],
@@ -262,7 +262,7 @@ fn resolve_mappings_overlapping_targets() {
 
     // Should have one entry, with the last mapping value (GPU temp)
     std::assert_eq!(result.len(), 1);
-    std::assert_eq!(result.get(&(0, 1)), Some(&78.0));
+    std::assert_eq!(result.get(&("0".to_string(), 1)), Some(&78.0));
 }
 
 #[test]
@@ -298,7 +298,7 @@ fn resolve_mappings_high_precision_temperature() {
     let mappings = vec![MappingCfg {
         sensor: "precise_sensor".to_string(),
         targets: vec![FanTarget {
-            controller: 2,
+            controller_id: "2".to_string(),
             fan_idx: 3,
         }],
     }];
@@ -306,7 +306,7 @@ fn resolve_mappings_high_precision_temperature() {
     let result = resolve_mappings(&temperatures, &mappings);
 
     std::assert_eq!(result.len(), 1);
-    std::assert_eq!(result.get(&(2, 3)), Some(&42.123456));
+    std::assert_eq!(result.get(&("2".to_string(), 3)), Some(&42.123456));
 }
 
 #[test]
@@ -318,11 +318,11 @@ fn resolve_mappings_extreme_controller_fan_indices() {
         sensor: "test_sensor".to_string(),
         targets: vec![
             FanTarget {
-                controller: 255,
+                controller_id: "255".to_string(),
                 fan_idx: 255,
             }, // Max u8 values
             FanTarget {
-                controller: 0,
+                controller_id: "0".to_string(),
                 fan_idx: 0,
             }, // Min u8 values
         ],
@@ -331,8 +331,8 @@ fn resolve_mappings_extreme_controller_fan_indices() {
     let result = resolve_mappings(&temperatures, &mappings);
 
     std::assert_eq!(result.len(), 2);
-    std::assert_eq!(result.get(&(255, 255)), Some(&50.0));
-    std::assert_eq!(result.get(&(0, 0)), Some(&50.0));
+    std::assert_eq!(result.get(&("255".to_string(), 255)), Some(&50.0));
+    std::assert_eq!(result.get(&("0".to_string(), 0)), Some(&50.0));
 }
 
 #[test]

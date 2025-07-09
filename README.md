@@ -26,10 +26,12 @@ A high-performance, asynchronous Rust daemon for controlling Thermaltake Riing f
 ### Core Functionality
 * **Asynchronous Architecture** - Built with [Tokio](https://tokio.rs/) for high-performance, non-blocking operations
 * **HID Driver Support** - Native support for Thermaltake Riing controllers (PID 0x232B–0x232E)
+* **Hotplug Support** - Automatic detection and management of USB device connect/disconnect events
 * **Temperature Monitoring** - Integrated lm-sensors and NVIDIA GPU support with configurable polling
 * **Advanced Fan Curves** - Support for constant, step-based, and smooth Bézier curves
 * **RGB Control** - Full RGB lighting control with temperature-based color mapping
 * **Hot Configuration Reload** - Dynamic configuration updates without daemon restart
+* **Hardware Fingerprinting** - Stable controller identification across reconnections
 
 ### Integration & APIs
 * **D-Bus Interface** - Complete D-Bus API for external integration:
@@ -47,7 +49,7 @@ A high-performance, asynchronous Rust daemon for controlling Thermaltake Riing f
 ### Architecture Highlights
 * **Modular Service Architecture** - Plugin-based service providers
 * **Event-Driven Design** - Async event bus for inter-service communication
-* **Comprehensive Testing** - 162+ unit tests with edge case coverage
+* **Comprehensive Testing** - 186+ tests (unit, integration, and documentation) with edge case coverage
 * **Performance Monitoring** - Built-in metrics and health checks
 * **Zero Runtime Dependencies** - Minimal dependency footprint
 
@@ -160,16 +162,16 @@ curves:
 mappings:
   - sensor: "cpu_temp"
     targets:
-      - controller: 1
+      - controller_id: "main_controller"
         fan_idx: 1
-      - controller: 1
+      - controller_id: "main_controller"
         fan_idx: 2
 
 # Active curve assignments
 active_curve_mappings:
   - curve: "performance"
     targets:
-      - controller: 1
+      - controller_id: "main_controller"
         fan_idx: 1
 
 # RGB color definitions
@@ -183,7 +185,7 @@ colors:
 color_mappings:
   - color: "cool_blue"
     targets:
-      - controller: 1
+      - controller_id: "main_controller"
         fan_idx: 1
 ```
 
@@ -291,14 +293,14 @@ tt-riingd --config config.yml --daemon
 # Get daemon version
 riingctl version
 
-# Check active curve for controller 1, fan 1
-riingctl get-active-curve 1 1
+# Check active curve for main_controller, fan 1
+riingctl get-active-curve main_controller 1
 
 # Switch to performance curve
-riingctl switch-active-curve 1 1 performance
+riingctl switch-active-curve main_controller 1 performance
 
 # Update curve data (JSON format)
-riingctl update-curve-data 1 1 custom '{"kind":"constant","speed":75}'
+riingctl update-curve-data main_controller 1 custom '{"kind":"constant","speed":75}'
 
 # Stop daemon gracefully
 riingctl stop
@@ -311,7 +313,7 @@ riingctl stop
 busctl --user introspect io.github.tt_riingd /io/github/tt_riingd
 
 # Call methods directly
-busctl --user call io.github.tt_riingd /io/github/tt_riingd io.github.tt_riingd1 GetActiveCurve yy 1 1
+busctl --user call io.github.tt_riingd /io/github/tt_riingd io.github.tt_riingd1 GetActiveCurve sy "main_controller" 1
 
 # Monitor signals
 busctl --user monitor io.github.tt_riingd
@@ -352,10 +354,32 @@ busctl --user call io.github.tt_riingd /io/github/tt_riingd io.github.tt_riingd1
 ### Key Components
 
 - **SystemCoordinator**: Orchestrates service lifecycle and dependencies
-- **TaskManager**: Manages async tasks with graceful shutdown
+- **TaskManager**: Manages async tasks with graceful shutdown  
 - **EventBus**: Pub/sub system for inter-service communication
 - **ConfigManager**: Hot-reloadable configuration with validation
+- **Registry**: Hardware detection and configuration management with caching
+- **UdevWatcher**: Linux udev integration for hotplug device detection
 - **Service Providers**: Modular, pluggable service architecture
+
+### Hotplug Architecture
+
+```
+Device Connect/Disconnect Event
+         ↓
+    UdevWatcher
+         ↓
+      EventBus
+         ↓
+  SystemCoordinator
+         ↓
+   ControllerManager
+         ↓
+Registry (Config Cache) ←→ Hardware Fingerprinting
+         ↓
+  Controller Creation/Restoration
+```
+
+The system automatically detects when controllers are connected or disconnected, maintaining configuration state through hardware fingerprinting for seamless reconnection experience.
 
 ## Development
 
@@ -375,8 +399,20 @@ cargo build --all-features
 ### Testing
 
 ```bash
-# Run all tests
+# Run all tests (186+ tests total)
 cargo test
+
+# Run unit tests only (133 tests)
+cargo test --lib
+
+# Run integration tests (36 tests)
+cargo test --test integration_controllers
+cargo test --test integration_monitoring
+cargo test --test integration_e2e
+cargo test --test integration_config_reload
+
+# Run documentation tests (17 tests)
+cargo test --doc
 
 # Run with coverage
 cargo test --all-features
@@ -384,9 +420,10 @@ cargo tarpaulin --out html
 
 # Run specific test module
 cargo test config::tests
+cargo test drivers::tests
 
-# Run integration tests
-cargo test --test integration
+# Run a single test
+cargo test test_hotplug_functionality
 ```
 
 ### Code Quality
@@ -470,13 +507,20 @@ chmod +x .git/hooks/pre-commit
 
 See [ROADMAP.md](ROADMAP.md) for planned features and milestones.
 
+### Recently Completed
+
+- [x] **Hotplug Support** - Automatic USB device detection and management
+- [x] **Hardware Fingerprinting** - Stable controller identification across reconnections
+- [x] **Enhanced Testing** - Comprehensive test suite with 186+ tests
+- [x] **Improved Architecture** - Event-driven design with modular service providers
+
 ### Upcoming Features
 
 - [ ] **GUI Application** - GTK4/Libadwaita interface
 - [ ] **Plugin System** - Extensible architecture for custom sensors/controllers
 - [ ] **Advanced Curves** - PID controllers, machine learning optimization
 - [ ] **Packaging** - Distribution packages for major Linux distros
-- [ ] **Documentation** - Comprehensive user and developer guides
+- [ ] **Advanced Hotplug** - Configuration restoration and automatic fallback settings
 
 ## Troubleshooting
 

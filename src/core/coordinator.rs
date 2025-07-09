@@ -231,6 +231,32 @@ impl SystemCoordinator {
                     .context("Failed to shutdown gracefully after SystemShutdown event")?;
                 return Err(anyhow::anyhow!("System shutdown requested"));
             }
+            Ok(Event::DeviceConnected {
+                vendor_id,
+                product_id,
+                serial_number,
+            }) => {
+                info!(
+                    "Device connected: vendor_id={}, product_id={}, serial_number={:?}",
+                    vendor_id, product_id, serial_number
+                );
+                self.handle_device_connected(vendor_id, product_id, serial_number)
+                    .await
+                    .context("Failed to handle device connected event")?;
+            }
+            Ok(Event::DeviceDisconnected {
+                vendor_id,
+                product_id,
+                serial_number,
+            }) => {
+                info!(
+                    "Device disconnected: vendor_id={}, product_id={}, serial_number={:?}",
+                    vendor_id, product_id, serial_number
+                );
+                self.handle_device_disconnected(vendor_id, product_id, serial_number)
+                    .await
+                    .context("Failed to handle device disconnected event")?;
+            }
             Ok(event) => {
                 info!("Received event: {event:?}");
             }
@@ -241,6 +267,56 @@ impl SystemCoordinator {
                 warn!("Event bus lagged by {n} messages");
             }
         }
+        Ok(())
+    }
+
+    async fn handle_device_connected(
+        &self,
+        vendor_id: u16,
+        product_id: u16,
+        serial_number: Option<String>,
+    ) -> Result<()> {
+        info!(
+            "Handling device connected: vendor_id={}, product_id={}, serial_number={:?}",
+            vendor_id, product_id, serial_number
+        );
+
+        if let Some(state) = &self.shared_state {
+            state
+                .controllers
+                .write()
+                .await
+                .device_connected(vendor_id, product_id, serial_number)
+                .await?
+        } else {
+            warn!("Cannot handle device connected event: system state not initialized");
+        }
+
+        Ok(())
+    }
+
+    async fn handle_device_disconnected(
+        &self,
+        vendor_id: u16,
+        product_id: u16,
+        serial_number: Option<String>,
+    ) -> Result<()> {
+        info!(
+            "Handling device disconnected: vendor_id={}, product_id={}, serial_number={:?}",
+            vendor_id, product_id, serial_number
+        );
+
+        if let Some(state) = &self.shared_state {
+            state
+                .controllers
+                .write()
+                .await
+                .device_disconnected(vendor_id, product_id, serial_number)
+                .await?
+        } else {
+            warn!("Cannot handle device disconnected event: system state not initialized");
+        }
+
         Ok(())
     }
 

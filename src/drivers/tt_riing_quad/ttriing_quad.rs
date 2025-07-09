@@ -1,12 +1,12 @@
 use crate::{
-    config::ControllerCfg,
-    drivers::{fan_controller::FanController, registry::HardwareInfo},
+    config::{ControllerCfg, UsbSelector},
+    drivers::{HardwareFingerprint, fan_controller::FanController, registry::HardwareInfo},
 };
 use std::sync::Arc;
 
 use anyhow::{Ok, Result, anyhow};
 use async_trait::async_trait;
-use hidapi::{HidApi, HidDevice};
+use hidapi::{DeviceInfo, HidApi, HidDevice};
 use tokio::sync::{Mutex, MutexGuard};
 #[allow(unused_imports)]
 use tracing::{debug, info};
@@ -38,7 +38,7 @@ use super::controller::{Controller, Fan};
 ///
 /// for controller in controllers {
 ///     controller.send_init().await?;
-///     controller.update_channel(1, 45.0, 50).await?;
+///     controller.update_speed_batch(&[(1, 50)]).await?;
 /// }
 /// # Ok(())
 /// # }
@@ -90,8 +90,33 @@ impl FanController for TTRiingQuad {
         self.read().await.get_firmware_version()
     }
 
+    async fn get_id(&self) -> String {
+        self.read().await.name.clone()
+    }
+
+    async fn get_device_info(&self) -> Result<DeviceInfo> {
+        let guard = self.read().await;
+        guard
+            .dev
+            .get_device_info()
+            .map_err(|e| anyhow!("Failed to get device info for TTRiingQuad: {e}"))
+    }
+
     fn led_count(&self) -> usize {
         52
+    }
+
+    async fn get_fingerprint(&self) -> Result<HardwareFingerprint> {
+        let guard = self.read().await;
+        let device_info = guard
+            .dev
+            .get_device_info()
+            .map_err(|e| anyhow!("Failed to get device info for TTRiingQuad: {e}"))?;
+        Ok(HardwareFingerprint {
+            vendor_id: device_info.vendor_id(),
+            product_id: device_info.product_id(),
+            serial: device_info.serial_number().map(|s| s.to_string()),
+        })
     }
 
     fn hardware_info() -> HardwareInfo {
@@ -100,6 +125,7 @@ impl FanController for TTRiingQuad {
             pids: vec![0x232B, 0x232C, 0x232D, 0x232E],
             channel_count: 5,
             name: "TTRiingQuad".to_string(),
+            create_fallback_config: Self::create_fallback_config_internal,
         }
     }
 }
@@ -130,28 +156,42 @@ impl TTRiingQuad {
     ) -> Result<Vec<Arc<dyn FanController>>> {
         Ok(ctrl_cfg
             .iter()
-            .filter_map(|cfg| {
-                if let ControllerCfg::RiingQuad { id, usb, fans } = cfg {
-                    let dev = api
-                        .open(usb.vid, usb.pid)
-                        .map_err(|e| anyhow!("Failed to open device: {e}"))
-                        .ok()?;
-                    Some(Arc::new(TTRiingQuad(Arc::new(Mutex::new(Controller {
-                        name: format!("TTRiingQuad{id}"),
-                        dev,
-                        fans: fans
-                            .iter()
-                            .map(|_| Fan {
-                                current_speed: 0,
-                                current_rpm: 0,
-                            })
-                            .collect(),
-                    })))) as Arc<dyn FanController>)
-                } else {
-                    None
-                }
-            })
+            .filter_map(|cfg| Self::create_one(api, cfg).ok())
             .collect())
+    }
+
+    pub fn create_one(api: &HidApi, cfg: &ControllerCfg) -> Result<Arc<dyn FanController>> {
+        #[allow(irrefutable_let_patterns)]
+        if let ControllerCfg::RiingQuad { id, usb, fans } = cfg {
+            let dev = api
+                .open(usb.vid, usb.pid)
+                .map_err(|e| anyhow!("Failed to open device: {e}"))?;
+            Ok(Arc::new(TTRiingQuad(Arc::new(Mutex::new(Controller {
+                name: id.clone(),
+                dev,
+                fans: fans
+                    .iter()
+                    .map(|_| Fan {
+                        current_speed: 0,
+                        current_rpm: 0,
+                    })
+                    .collect(),
+            })))))
+        } else {
+            Err(anyhow!("Invalid configuration for TTRiingQuad"))
+        }
+    }
+
+    fn create_fallback_config_internal(fingerprint: &HardwareFingerprint) -> ControllerCfg {
+        ControllerCfg::RiingQuad {
+            id: "fallback".to_string(),
+            usb: UsbSelector {
+                vid: fingerprint.vendor_id,
+                pid: fingerprint.product_id,
+                serial: fingerprint.serial.clone(),
+            },
+            fans: vec![],
+        }
     }
 
     async fn read(&self) -> MutexGuard<'_, Controller<HidDevice>> {

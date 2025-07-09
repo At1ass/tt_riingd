@@ -95,12 +95,12 @@ async fn test_controller_communication_errors() -> Result<()> {
     // Test Case 3: Channel update failure
     let mut update_failing_controller = MockMockableFanController::new();
     update_failing_controller
-        .expect_update_channel()
+        .expect_update_speed_batch()
         .times(1)
-        .returning(|_, _, _| Err(anyhow::anyhow!("Hardware error")));
+        .returning(|_| Err(anyhow::anyhow!("Hardware error")));
 
     let update_error = update_failing_controller
-        .update_channel(1, 45.0, 50)
+        .update_speed_batch(vec![(1, 50)])
         .await
         .expect_err("Channel update should fail");
     assert!(
@@ -120,28 +120,32 @@ async fn test_multi_channel_fan_control() -> Result<()> {
     // Arrange: Create controller with multiple channel expectations
     let mut mock_controller = MockMockableFanController::new();
 
-    // Setup expectations for 4 channels
-    for channel in 1..=4 {
-        let expected_temp = 40.0 + (channel as f32 * 5.0); // Different temps per channel
-        let expected_speed = 30 + (channel * 10); // Different speeds per channel
+    // Setup expectations for batch updates
+    let expected_updates = vec![
+        (1, 40),  // Channel 1, speed 40
+        (2, 50),  // Channel 2, speed 50  
+        (3, 60),  // Channel 3, speed 60
+        (4, 70),  // Channel 4, speed 70
+    ];
 
-        mock_controller
-            .expect_update_channel()
-            .with(eq(channel), eq(expected_temp), eq(expected_speed))
-            .times(1)
-            .returning(|_, _, _| Ok(()));
-    }
+    mock_controller
+        .expect_update_speed_batch()
+        .with(eq(expected_updates.clone()))
+        .times(1)
+        .returning(|_| Ok(()));
 
-    // Act: Update all channels
-    for channel in 1..=4 {
-        let temp = 40.0 + (channel as f32 * 5.0);
-        let speed = 30 + (channel * 10);
+    // Act: Update all channels using batch API
+    let updates = vec![
+        (1, 40),  // Channel 1, speed 40
+        (2, 50),  // Channel 2, speed 50  
+        (3, 60),  // Channel 3, speed 60
+        (4, 70),  // Channel 4, speed 70
+    ];
 
-        mock_controller
-            .update_channel(channel, temp, speed)
-            .await
-            .with_context(|| format!("Channel {channel} update should succeed"))?;
-    }
+    mock_controller
+        .update_speed_batch(updates)
+        .await
+        .context("Batch channel update should succeed")?;
 
     println!("✓ Multi-channel fan control operations completed");
     Ok(())
@@ -291,22 +295,21 @@ async fn test_controller_performance() -> Result<()> {
     // Arrange: Create controller with timing expectations
     let mut mock_controller = MockMockableFanController::new();
 
-    // Setup expectations for rapid updates
+    // Setup expectations for rapid batch updates
     mock_controller
-        .expect_update_channel()
+        .expect_update_speed_batch()
         .times(100)
-        .returning(|_, _, _| Ok(()));
+        .returning(|_| Ok(()));
 
     // Act: Measure update performance
     let start_time = std::time::Instant::now();
 
     for i in 0..100 {
         let channel = (i % 4) + 1;
-        let temp = 40.0 + (i as f32 * 0.1);
-        let speed = 30 + (i % 70);
+        let speed = (30 + (i % 70)) as u8;
 
         mock_controller
-            .update_channel(channel, temp, speed)
+            .update_speed_batch(vec![(channel, speed)])
             .await
             .with_context(|| format!("Update {i} should succeed"))?;
     }
@@ -416,17 +419,17 @@ async fn test_controller_error_recovery() -> Result<()> {
 
     // First call fails, second succeeds (simulates recovery)
     recovering_controller
-        .expect_update_channel()
+        .expect_update_speed_batch()
         .times(1)
-        .returning(|_, _, _| Err(anyhow::anyhow!("Temporary USB error")));
+        .returning(|_| Err(anyhow::anyhow!("Temporary USB error")));
 
     recovering_controller
-        .expect_update_channel()
+        .expect_update_speed_batch()
         .times(1)
-        .returning(|_, _, _| Ok(()));
+        .returning(|_| Ok(()));
 
     // Act: First call should fail
-    let first_result = recovering_controller.update_channel(1, 45.0, 50).await;
+    let first_result = recovering_controller.update_speed_batch(vec![(1, 50)]).await;
     let first_error = first_result.expect_err("First call should fail");
     assert!(
         first_error.to_string().contains("Temporary USB error"),
@@ -435,7 +438,7 @@ async fn test_controller_error_recovery() -> Result<()> {
 
     // Second call should succeed (recovery)
     recovering_controller
-        .update_channel(1, 45.0, 50)
+        .update_speed_batch(vec![(1, 50)])
         .await
         .context("Recovery call should succeed")?;
 
@@ -449,14 +452,14 @@ async fn test_controller_error_recovery() -> Result<()> {
         .returning(|| Ok(()));
 
     reset_controller
-        .expect_update_channel()
+        .expect_update_speed_batch()
         .times(1)
-        .returning(|_, _, _| Err(anyhow::anyhow!("Device reset required")));
+        .returning(|_| Err(anyhow::anyhow!("Device reset required")));
 
     reset_controller
-        .expect_update_channel()
+        .expect_update_speed_batch()
         .times(1)
-        .returning(|_, _, _| Ok(()));
+        .returning(|_| Ok(()));
 
     // Act: Initialize, fail, re-initialize, succeed
     reset_controller
@@ -464,7 +467,7 @@ async fn test_controller_error_recovery() -> Result<()> {
         .await
         .context("Initial initialization should succeed")?;
 
-    let failure_result = reset_controller.update_channel(1, 45.0, 50).await;
+    let failure_result = reset_controller.update_speed_batch(vec![(1, 50)]).await;
     let failure_error = failure_result.expect_err("Update should fail requiring reset");
     assert!(
         failure_error.to_string().contains("Device reset required"),
@@ -478,7 +481,7 @@ async fn test_controller_error_recovery() -> Result<()> {
         .context("Reset initialization should succeed")?;
 
     reset_controller
-        .update_channel(1, 45.0, 50)
+        .update_speed_batch(vec![(1, 50)])
         .await
         .context("Post-reset update should succeed")?;
 

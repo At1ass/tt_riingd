@@ -396,9 +396,9 @@ async fn test_mock_hardware_integration() -> Result<()> {
         .returning(|| Ok((2, 1, 0)));
 
     mock_controller
-        .expect_update_channel()
+        .expect_update_speed_batch()
         .times(3)
-        .returning(|_, _, _| Ok(()));
+        .returning(|_| Ok(()));
 
     mock_sensor
         .expect_sensor_key()
@@ -427,7 +427,7 @@ async fn test_mock_hardware_integration() -> Result<()> {
         let fan_speed = ((temperature - 20.0) * 2.0).clamp(0.0, 100.0) as u8;
 
         mock_controller
-            .update_channel(i, temperature, fan_speed)
+            .update_speed_batch(vec![(i, fan_speed)])
             .await?;
     }
 

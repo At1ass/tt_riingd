@@ -15,11 +15,11 @@ async fn create_mock_app_state_with_colors() -> Arc<AppState> {
             effect: "red".to_string(),
             targets: vec![
                 FanTarget {
-                    controller: 1,
+                    controller_id: "1".to_string(),
                     fan_idx: 1,
                 },
                 FanTarget {
-                    controller: 1,
+                    controller_id: "1".to_string(),
                     fan_idx: 2,
                 },
             ],
@@ -178,7 +178,7 @@ async fn fan_color_service_handles_missing_colors() {
         effect_mappings: vec![EffectMappingCfg {
             effect: "nonexistent_color".to_string(),
             targets: vec![FanTarget {
-                controller: 1,
+                controller_id: "1".to_string(),
                 fan_idx: 1,
             }],
         }],
@@ -257,14 +257,14 @@ async fn fan_color_service_multiple_color_mappings() {
             EffectMappingCfg {
                 effect: "red".to_string(),
                 targets: vec![FanTarget {
-                    controller: 1,
+                    controller_id: "1".to_string(),
                     fan_idx: 1,
                 }],
             },
             EffectMappingCfg {
                 effect: "blue".to_string(),
                 targets: vec![FanTarget {
-                    controller: 1,
+                    controller_id: "1".to_string(),
                     fan_idx: 2,
                 }],
             },

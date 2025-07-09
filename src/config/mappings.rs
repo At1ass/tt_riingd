@@ -18,10 +18,11 @@ pub type SensorKey = String;
 ///
 /// Uniquely identifies a fan channel by its controller and channel number.
 /// Used as a key for mapping relationships between sensors and fans.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct FanRef {
     /// Controller index (0-based).
-    pub controller_id: usize,
+    // pub controller_id: usize,
+    pub controller_id: String,
 
     /// Fan channel on the controller (0-based).
     pub channel: usize,
@@ -59,7 +60,7 @@ impl CurveMapping {
             })
             .fold(Self::default(), |acc, (curve, target)| {
                 let fan = FanRef {
-                    controller_id: target.controller as usize,
+                    controller_id: target.controller_id.clone(),
                     channel: target.fan_idx as usize,
                 };
 
@@ -144,7 +145,7 @@ impl EffectMapping {
             })
             .fold(Self::default(), |acc, (sensor, target)| {
                 let fan = FanRef {
-                    controller_id: target.controller as usize,
+                    controller_id: target.controller_id.clone(),
                     channel: target.fan_idx as usize,
                 };
 
@@ -182,12 +183,15 @@ impl Mapping {
             })
             .fold(Self::default(), |acc, (sensor, target)| {
                 let fan = FanRef {
-                    controller_id: target.controller as usize,
+                    controller_id: target.controller_id.clone(),
                     channel: target.fan_idx as usize,
                 };
 
-                acc.fans2sensor.insert(fan, sensor.clone());
-                acc.sensor2fans.entry(sensor).or_default().insert(fan);
+                acc.fans2sensor.insert(fan.clone(), sensor.clone());
+                acc.sensor2fans
+                    .entry(sensor)
+                    .or_default()
+                    .insert(fan.clone());
                 acc
             })
     }
@@ -211,6 +215,6 @@ impl Mapping {
         self.sensor2fans
             .get(sensor)
             .into_iter()
-            .flat_map(|set| set.iter().map(|r| *r).collect::<Vec<_>>())
+            .flat_map(|set| set.iter().map(|r| r.clone()).collect::<Vec<_>>())
     }
 }

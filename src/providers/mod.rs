@@ -1,7 +1,199 @@
-//! Dependency injection providers for service management.
+//! Service provider system for modular system architecture.
 //!
-//! This module contains all providers for creating and managing system components
-//! using the Dependency Injection pattern for loose coupling and testability.
+//! This module implements a service provider pattern with dependency injection for managing
+//! the various services that make up the tt_riingd daemon. Each service is encapsulated
+//! in a provider that handles instantiation, configuration, and lifecycle management.
+//!
+//! # Architecture Overview
+//!
+//! The provider system follows a dependency injection pattern with these key concepts:
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                   SystemCoordinator                         │
+//! │              (Service Orchestration)                       │
+//! └─────────────────────────────────────────────────────────────┘
+//!                              │
+//!                              ▼
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                 Service Providers                           │
+//! │  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────────┐ │
+//! │  │ Monitoring  │ │    D-Bus    │ │      UdevWatcher        │ │
+//! │  │  Provider   │ │  Provider   │ │       Provider          │ │
+//! │  └─────────────┘ └─────────────┘ └─────────────────────────┘ │
+//! │  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────────┐ │
+//! │  │   Broadcast │ │  FanColor   │ │    ConfigWatcher        │ │
+//! │  │   Provider  │ │  Provider   │ │       Provider          │ │
+//! │  └─────────────┘ └─────────────┘ └─────────────────────────┘ │
+//! └─────────────────────────────────────────────────────────────┘
+//!                              │
+//!                              ▼
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                   Shared Dependencies                       │
+//! │     AppState, EventBus, ConfigManager                      │
+//! └─────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! # Service Provider Pattern
+//!
+//! Each service provider implements the [`ServiceProvider`] trait, which defines:
+//! - **Metadata**: Name, priority, and criticality classification
+//! - **Creation**: Factory methods for service instantiation
+//! - **Lifecycle**: Start, stop, and cleanup operations
+//! - **Dependencies**: Required shared state and communication channels
+//!
+//! # Service Categories
+//!
+//! Services are categorized by their role in the system:
+//!
+//! ## Core Services (Critical)
+//! - **[`MonitoringService`](monitoring)**: Temperature polling and fan control
+//! - **[`ConfigWatcherService`](config_watcher)**: Configuration hot-reload
+//!
+//! ## Interface Services (High Priority)
+//! - **[`DBusService`](dbus)**: External API and system integration
+//! - **[`UdevWatcherService`](udev_watcher)**: Hardware hotplug detection
+//!
+//! ## Feature Services (Normal Priority)
+//! - **[`FanColorService`](fan_color)**: RGB lighting control
+//! - **[`BroadcastService`](broadcast)**: Temperature broadcasting
+//!
+//! # Dependency Injection
+//!
+//! Services receive their dependencies through constructor injection:
+//!
+//! ```no_run
+//! use tt_riingd::providers::{ServiceProvider, MonitoringServiceProvider};
+//! use tt_riingd::core::{AppState, EventBus};
+//! use tt_riingd::config::ConfigManager;
+//! use std::sync::Arc;
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! // Create shared dependencies
+//! let config_manager = ConfigManager::load(None).await?;
+//! let app_state = Arc::new(AppState::new(config_manager).await?);
+//! let event_bus = EventBus::new();
+//!
+//! // Create provider with injected dependencies
+//! let monitoring_provider = MonitoringServiceProvider::new(
+//!     app_state.clone(),
+//!     event_bus.clone()
+//! );
+//!
+//! // Access provider metadata
+//! println!("Service: {} (priority: {})", 
+//!          monitoring_provider.name(), monitoring_provider.priority());
+//! println!("Critical: {}", monitoring_provider.is_critical());
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Service Lifecycle
+//!
+//! Services follow a standardized lifecycle managed by the SystemCoordinator:
+//!
+//! 1. **Registration**: Providers registered with coordinator
+//! 2. **Dependency Resolution**: Shared dependencies prepared
+//! 3. **Priority Ordering**: Services sorted by priority and criticality
+//! 4. **Instantiation**: Services created via provider factories
+//! 5. **Startup**: Services started in dependency order
+//! 6. **Runtime**: Services operate independently via EventBus
+//! 7. **Shutdown**: Graceful shutdown in reverse priority order
+//!
+//! # Event-Driven Communication
+//!
+//! Services communicate through the [`EventBus`](crate::core::event::EventBus) using
+//! strongly-typed events:
+//!
+//! ```no_run
+//! use tt_riingd::core::event::{Event, EventBus};
+//! use std::collections::HashMap;
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! // Event-driven communication between services
+//! let event_bus = EventBus::new();
+//! let mut subscriber = event_bus.subscribe();
+//!
+//! // Publish temperature update event
+//! let mut temps = HashMap::new();
+//! temps.insert("cpu_temp".to_string(), 65.0);
+//! event_bus.publish(Event::TemperatureChanged(temps))?;
+//!
+//! // Handle events in services
+//! if let Ok(event) = subscriber.recv().await {
+//!     match event {
+//!         Event::TemperatureChanged(temperatures) => {
+//!             for (sensor_id, temp) in temperatures {
+//!                 println!("Sensor {} updated: {}°C", sensor_id, temp);
+//!             }
+//!         }
+//!         Event::ConfigChangeDetected(change_type) => {
+//!             println!("Configuration change detected: {:?}", change_type);
+//!         }
+//!         _ => {}
+//!     }
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Examples
+//!
+//! ## Creating a Custom Service Provider
+//!
+//! ```no_run
+//! use tt_riingd::providers::traits::ServiceProvider;
+//! use tt_riingd::core::task_manager::TaskManager;
+//! use async_trait::async_trait;
+//! use anyhow::Result;
+//!
+//! pub struct CustomServiceProvider;
+//!
+//! #[async_trait]
+//! impl ServiceProvider for CustomServiceProvider {
+//!     fn name(&self) -> &'static str { 
+//!         "CustomService" 
+//!     }
+//!     
+//!     fn priority(&self) -> i32 { 
+//!         5 
+//!     }
+//!     
+//!     fn is_critical(&self) -> bool { 
+//!         false 
+//!     }
+//!
+//!     async fn start(&self, task_manager: &mut TaskManager) -> Result<()> {
+//!         // Custom service initialization logic
+//!         println!("Starting custom service");
+//!         Ok(())
+//!     }
+//! }
+//! ```
+//!
+//! ## Service Registration and Startup
+//!
+//! ```no_run
+//! use tt_riingd::core::coordinator::SystemCoordinator;
+//! use tt_riingd::providers::{MonitoringServiceProvider, BroadcastServiceProvider};
+//! use tt_riingd::core::{AppState, EventBus};
+//! use tt_riingd::config::ConfigManager;
+//! use std::sync::Arc;
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! // Initialize shared dependencies  
+//! let config_manager = ConfigManager::load(None).await?;
+//! let app_state = Arc::new(AppState::new(config_manager).await?);
+//! let event_bus = EventBus::new();
+//!
+//! // Create coordinator and register services
+//! let mut coordinator = SystemCoordinator::new();
+//! 
+//! // Services are registered in priority order and started automatically
+//! println!("System coordinator orchestrates service lifecycle");
+//! # Ok(())
+//! # }
+//! ```
 
 pub mod app_state;
 pub mod broadcast;

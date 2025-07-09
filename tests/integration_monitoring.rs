@@ -282,10 +282,10 @@ async fn test_mock_fan_controller() -> Result<()> {
         .returning(|| Ok(()));
 
     mock_controller
-        .expect_update_channel()
-        .with(eq(1), eq(45.0), eq(50))
+        .expect_update_speed_batch()
+        .with(eq(vec![(1, 50)]))
         .times(1)
-        .returning(|_, _, _| Ok(()));
+        .returning(|_| Ok(()));
 
     mock_controller
         .expect_firmware_version()
@@ -294,7 +294,7 @@ async fn test_mock_fan_controller() -> Result<()> {
 
     // Act & Assert: Test mock behavior
     mock_controller.send_init().await?;
-    mock_controller.update_channel(1, 45.0, 50).await?;
+    mock_controller.update_speed_batch(vec![(1, 50)]).await?;
     let version = mock_controller.firmware_version().await?;
 
     assert_eq!(version, (1, 2, 3));
