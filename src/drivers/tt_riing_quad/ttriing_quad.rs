@@ -184,7 +184,10 @@ impl TTRiingQuad {
 
     fn create_fallback_config_internal(fingerprint: &HardwareFingerprint) -> ControllerCfg {
         ControllerCfg::RiingQuad {
-            id: "fallback".to_string(),
+            id: format!(
+                "fallback_{}:{}",
+                fingerprint.vendor_id, fingerprint.product_id
+            ),
             usb: UsbSelector {
                 vid: fingerprint.vendor_id,
                 pid: fingerprint.product_id,
