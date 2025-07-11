@@ -81,7 +81,7 @@
 //! );
 //!
 //! // Access provider metadata
-//! println!("Service: {} (priority: {})", 
+//! println!("Service: {} (priority: {})",
 //!          monitoring_provider.name(), monitoring_provider.priority());
 //! println!("Critical: {}", monitoring_provider.is_critical());
 //! # Ok(())
@@ -151,16 +151,16 @@
 //!
 //! #[async_trait]
 //! impl ServiceProvider for CustomServiceProvider {
-//!     fn name(&self) -> &'static str { 
-//!         "CustomService" 
+//!     fn name(&self) -> &'static str {
+//!         "CustomService"
 //!     }
 //!     
-//!     fn priority(&self) -> i32 { 
-//!         5 
+//!     fn priority(&self) -> i32 {
+//!         5
 //!     }
 //!     
-//!     fn is_critical(&self) -> bool { 
-//!         false 
+//!     fn is_critical(&self) -> bool {
+//!         false
 //!     }
 //!
 //!     async fn start(&self, task_manager: &mut TaskManager) -> Result<()> {
@@ -188,7 +188,7 @@
 //!
 //! // Create coordinator and register services
 //! let mut coordinator = SystemCoordinator::new();
-//! 
+//!
 //! // Services are registered in priority order and started automatically
 //! println!("System coordinator orchestrates service lifecycle");
 //! # Ok(())

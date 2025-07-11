@@ -102,7 +102,7 @@
 //! # fn example() -> anyhow::Result<()> {
 //! // Parse CLI arguments for development mode
 //! let args = cli::Cli::parse();
-//! 
+//!
 //! if !args.daemonize {
 //!     println!("Running in foreground mode");
 //!     // Application runs in current terminal

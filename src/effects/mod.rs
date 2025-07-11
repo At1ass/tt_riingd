@@ -85,10 +85,10 @@
 //! # async fn example() -> anyhow::Result<()> {
 //! // Create a constant color effect
 //! let blue_static = EffectRunner::constant([0, 100, 255]);
-//! 
+//!
 //! // Create a rainbow effect with 10-second period
 //! let rainbow = EffectRunner::rainbow(Duration::from_secs(10));
-//! 
+//!
 //! // Create a breathing effect
 //! let breathing = EffectRunner::breathe(
 //!     [255, 0, 0],         // Red color

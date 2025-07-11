@@ -154,7 +154,7 @@
 //! # async fn example() -> anyhow::Result<()> {
 //! // Load and validate configuration
 //! let config_manager = ConfigManager::load(None).await?;
-//! 
+//!
 //! // Configuration is automatically validated during loading
 //! // Check for configuration changes that require reload vs restart
 //! let change_type = config_manager.analyze_config_changes().await?;

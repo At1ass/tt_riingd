@@ -32,8 +32,8 @@ use super::registry::HardwareInfo;
 ///     async fn get_fingerprint(&self) -> Result<tt_riingd::drivers::HardwareFingerprint> { todo!() }
 ///     fn hardware_info() -> tt_riingd::drivers::registry::HardwareInfo
 ///     where Self: Sized {
-///         tt_riingd::drivers::registry::HardwareInfo { 
-///             vid: 0x1234, pids: vec![0x5678], channel_count: 4, 
+///         tt_riingd::drivers::registry::HardwareInfo {
+///             vid: 0x1234, pids: vec![0x5678], channel_count: 4,
 ///             name: "Mock".to_string(),
 ///             create_fallback_config: |_| todo!(),
 ///         }

@@ -151,30 +151,30 @@ pub mod tt_riing_quad;
 mod worker_manager;
 
 /// Color data for a single fan channel: (channel_index, RGB_colors).
-/// 
+///
 /// Used for sending RGB lighting data to individual fan channels.
 /// Each RGB color is represented as a tuple of (red, green, blue) values (0-255).
 type ColorBuffer = (usize, Vec<(u8, u8, u8)>);
 
 /// Collection of color data for multiple channels on a single controller.
-/// 
+///
 /// Enables batch RGB updates across multiple fan channels simultaneously
 /// for improved performance and synchronization.
 type ControllerColorBuffer = Vec<ColorBuffer>;
 
 /// Reference version of ColorBuffer for efficient batch operations.
-/// 
+///
 /// Uses borrowed slices to avoid copying color data during batch processing.
 type ColorBufferForSend<'a> = (usize, &'a [(u8, u8, u8)]);
 
 /// Reference version of ControllerColorBuffer for efficient batch operations.
-/// 
+///
 /// Used internally by the worker system to minimize memory allocations
 /// during high-frequency RGB updates.
 type ControllerColorBufferForSend<'a> = Vec<ColorBufferForSend<'a>>;
 
 /// Global HID API instance for hardware communication.
-/// 
+///
 /// Initialized lazily on first access. If HID API initialization fails,
 /// hardware control will be disabled but the daemon will continue running
 /// in a degraded mode for monitoring and configuration validation.
@@ -193,28 +193,28 @@ static HIDAPI: LazyLock<Option<HidApi>> = LazyLock::new(|| match HidApi::new() {
 });
 
 /// Hardware device fingerprint for stable identification across reconnections.
-/// 
+///
 /// Provides a stable way to identify hardware devices that persists across
 /// USB disconnect/reconnect cycles. Used by the hotplug system to restore
 /// configurations when devices reconnect.
-/// 
+///
 /// # Examples
-/// 
+///
 /// ```
 /// use tt_riingd::drivers::HardwareFingerprint;
-/// 
+///
 /// let fingerprint = HardwareFingerprint {
 ///     vendor_id: 0x264a,                    // Thermaltake USB VID
 ///     product_id: 0x2330,                   // Riing Quad USB PID
 ///     serial: Some("TT-RQ-001".to_string()), // Optional unique serial
 /// };
-/// 
+///
 /// // Fingerprints can be compared for equality
 /// assert_eq!(fingerprint.vendor_id, 0x264a);
 /// ```
-/// 
+///
 /// # Hotplug Workflow
-/// 
+///
 /// 1. Device connects → System reads VID/PID/serial
 /// 2. Creates fingerprint → Looks up cached configuration
 /// 3. Restores settings → Continues operation seamlessly
@@ -225,7 +225,7 @@ pub struct HardwareFingerprint {
     /// USB Product ID (16-bit identifier assigned by vendor).
     pub product_id: u16,
     /// Optional device serial number for unique identification.
-    /// 
+    ///
     /// When present, enables disambiguation between multiple devices
     /// of the same model. When None, identification relies on VID/PID only.
     pub serial: Option<String>,

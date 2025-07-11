@@ -159,7 +159,7 @@ pub struct HardwareInfo {
     /// Human-readable name for this hardware type.
     pub name: String,
     /// Factory function for creating fallback configurations.
-    /// 
+    ///
     /// Called when a device with matching fingerprint is detected but no
     /// cached configuration exists. Should create a minimal working config.
     pub create_fallback_config: fn(&HardwareFingerprint) -> ControllerCfg,
@@ -488,7 +488,11 @@ mod tests {
             name: "Test Controller".to_string(),
             create_fallback_config: |_fingerprint| ControllerCfg::RiingQuad {
                 id: "test".to_string(),
-                usb: UsbSelector { vid: 0x264A, pid: 0x232B, serial: None },
+                usb: UsbSelector {
+                    vid: 0x264A,
+                    pid: 0x232B,
+                    serial: None,
+                },
                 fans: vec![],
             },
         };
@@ -521,7 +525,11 @@ mod tests {
             name: "Test Controller".to_string(),
             create_fallback_config: |_fingerprint| ControllerCfg::RiingQuad {
                 id: "test".to_string(),
-                usb: UsbSelector { vid: 0x264A, pid: 0x232B, serial: None },
+                usb: UsbSelector {
+                    vid: 0x264A,
+                    pid: 0x232B,
+                    serial: None,
+                },
                 fans: vec![],
             },
         };
