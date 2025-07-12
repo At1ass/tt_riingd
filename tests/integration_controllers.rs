@@ -122,10 +122,10 @@ async fn test_multi_channel_fan_control() -> Result<()> {
 
     // Setup expectations for batch updates
     let expected_updates = vec![
-        (1, 40),  // Channel 1, speed 40
-        (2, 50),  // Channel 2, speed 50  
-        (3, 60),  // Channel 3, speed 60
-        (4, 70),  // Channel 4, speed 70
+        (1, 40), // Channel 1, speed 40
+        (2, 50), // Channel 2, speed 50
+        (3, 60), // Channel 3, speed 60
+        (4, 70), // Channel 4, speed 70
     ];
 
     mock_controller
@@ -136,10 +136,10 @@ async fn test_multi_channel_fan_control() -> Result<()> {
 
     // Act: Update all channels using batch API
     let updates = vec![
-        (1, 40),  // Channel 1, speed 40
-        (2, 50),  // Channel 2, speed 50  
-        (3, 60),  // Channel 3, speed 60
-        (4, 70),  // Channel 4, speed 70
+        (1, 40), // Channel 1, speed 40
+        (2, 50), // Channel 2, speed 50
+        (3, 60), // Channel 3, speed 60
+        (4, 70), // Channel 4, speed 70
     ];
 
     mock_controller
@@ -429,7 +429,9 @@ async fn test_controller_error_recovery() -> Result<()> {
         .returning(|_| Ok(()));
 
     // Act: First call should fail
-    let first_result = recovering_controller.update_speed_batch(vec![(1, 50)]).await;
+    let first_result = recovering_controller
+        .update_speed_batch(vec![(1, 50)])
+        .await;
     let first_error = first_result.expect_err("First call should fail");
     assert!(
         first_error.to_string().contains("Temporary USB error"),

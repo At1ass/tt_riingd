@@ -49,7 +49,7 @@ impl DBusInterface {
     ) -> zbus::fdo::Result<()> {
         emitter.stopped().await?;
         self.event_bus
-            .publish(Event::SystemShutdown)
+            .notify(Event::SystemShutdown)
             .map_err(|e| zbus::fdo::Error::Failed(format!("Failed to publish shutdown event: {e}")))
     }
 
@@ -59,11 +59,11 @@ impl DBusInterface {
         self.version.clone()
     }
 
-    /// Returns current temperature readings from all sensors.
-    async fn get_temperatures(&self) -> zbus::fdo::Result<HashMap<String, f32>> {
-        let sensor_data = self.app_state.sensor_data.read().await;
-        Ok(sensor_data.clone())
-    }
+    // /// Returns current temperature readings from all sensors.
+    // async fn get_temperatures(&self) -> zbus::fdo::Result<HashMap<String, f32>> {
+    //     let sensor_data = self.app_state.sensor_data.read().await;
+    //     Ok(sensor_data.clone())
+    // }
 
     /// Analyzes and applies configuration changes.
     ///
@@ -91,7 +91,7 @@ impl DBusInterface {
 
                 if let Err(e) = self
                     .event_bus
-                    .publish(Event::ConfigChangeDetected(change_type))
+                    .notify(Event::ConfigChangeDetected(change_type))
                 {
                     return Err(zbus::fdo::Error::Failed(format!(
                         "Failed to publish config change event: {e}"

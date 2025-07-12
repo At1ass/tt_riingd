@@ -307,7 +307,7 @@ async fn handle_udev_event_info(event_info: UdevEventInfo, event_bus: &EventBus)
                     .unwrap_or_else(|| "none".to_string())
             );
 
-            if let Err(e) = event_bus.publish(crate::event::Event::DeviceConnected {
+            if let Err(e) = event_bus.notify(crate::event::Event::DeviceConnected {
                 vendor_id: event_info.vendor_id,
                 product_id: event_info.product_id,
                 serial_number: event_info.serial,
@@ -327,7 +327,7 @@ async fn handle_udev_event_info(event_info: UdevEventInfo, event_bus: &EventBus)
                     .clone()
                     .unwrap_or_else(|| "none".to_string())
             );
-            if let Err(e) = event_bus.publish(crate::event::Event::DeviceDisconnected {
+            if let Err(e) = event_bus.notify(crate::event::Event::DeviceDisconnected {
                 vendor_id: event_info.vendor_id,
                 product_id: event_info.product_id,
                 serial_number: event_info.serial,

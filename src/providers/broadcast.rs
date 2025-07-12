@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use std::sync::Arc;
 use std::time::Duration;
+use std::{collections::HashMap, sync::Arc};
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
@@ -113,9 +113,10 @@ async fn run_broadcast_service(
 }
 
 async fn broadcast_current_state(state: &Arc<AppState>, event_bus: &EventBus) {
-    let sensor_data = state.sensor_data.read().await.clone();
+    // let sensor_data = state.sensor_data.read().await.clone();
+    let sensor_data = HashMap::new();
 
-    if let Err(e) = event_bus.publish(Event::TemperatureChanged(sensor_data)) {
+    if let Err(e) = event_bus.notify(Event::TemperatureChanged(sensor_data)) {
         error!("Failed to broadcast temperature state: {e}");
     }
 }

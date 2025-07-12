@@ -76,7 +76,8 @@ impl<T: FanController> MockableFanController for FanControllerAdapter<T> {
     }
 
     async fn update_color_batch(&self, batch: ColorBatch) -> Result<()> {
-        let converted: Vec<(usize, &[(u8, u8, u8)])> = batch.iter()
+        let converted: Vec<(usize, &[(u8, u8, u8)])> = batch
+            .iter()
             .map(|(channel, colors)| (*channel, colors.as_slice()))
             .collect();
         self.inner.update_color_batch(&converted).await

@@ -8,6 +8,9 @@ use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
+use crate::ConfigManager;
+use crate::config::EffectStore;
+use crate::core::Event;
 use crate::drivers::commands::{BatchCommand, ExecutionMode};
 use crate::{
     app_context::AppState, event::EventBus, providers::traits::ServiceProvider,
@@ -54,9 +57,14 @@ use crate::{
 /// # Ok(())
 /// # }
 /// ```
+struct FanColorServiceCache {
+    pub runners: Arc<EffectStore>,
+}
+
 pub struct FanColorControlServiceProvider {
     state: Arc<AppState>,
     event_bus: EventBus,
+    cache: FanColorServiceCache,
 }
 
 type ControllerColorBuffer = Vec<(usize, Vec<(u8, u8, u8)>)>;
@@ -95,8 +103,17 @@ impl DoubleBuffer {
 
 impl FanColorControlServiceProvider {
     /// Creates a new fan color control service provider.
-    pub fn new(state: Arc<AppState>, event_bus: EventBus) -> Self {
-        Self { state, event_bus }
+    pub async fn new(state: Arc<AppState>, event_bus: EventBus, config: &ConfigManager) -> Self {
+        Self {
+            state,
+            event_bus,
+            cache: FanColorServiceCache {
+                runners: Arc::new(EffectStore::build_effect_store(
+                    &config.get().await.effects,
+                    &config.get().await.effect_mappings,
+                )),
+            },
+        }
     }
 }
 
@@ -105,6 +122,7 @@ impl ServiceProvider for FanColorControlServiceProvider {
     async fn start(&self, task_manager: &mut TaskManager) -> Result<()> {
         let state = self.state.clone();
         let event_bus = self.event_bus.clone();
+        let runners = self.cache.runners.clone();
 
         let double_buffer = Arc::new(DoubleBuffer::new());
         task_manager
@@ -113,7 +131,8 @@ impl ServiceProvider for FanColorControlServiceProvider {
                 let event_bus = event_bus.clone();
                 let buffer = double_buffer.clone();
                 |cancel_token| async move {
-                    run_calculate_colors_service(state, event_bus, buffer, cancel_token).await
+                    run_calculate_colors_service(state, event_bus, buffer, cancel_token, runners)
+                        .await
                 }
             })
             .await?;
@@ -148,8 +167,10 @@ async fn run_calculate_colors_service(
     event_bus: EventBus,
     buffer: Arc<DoubleBuffer>,
     cancel_token: CancellationToken,
+    runners: Arc<EffectStore>,
 ) -> Result<()> {
     let mut interval = interval(Duration::from_millis(50));
+    let mut subscriber = event_bus.subscribe();
 
     loop {
         tokio::select! {
@@ -157,12 +178,41 @@ async fn run_calculate_colors_service(
                 info!("Fan color service cancelled");
                 break;
             }
+            event = subscriber.recv() => {
+                match event {
+                    Ok(e) => {
+                        debug!("Received event: {:?}", e);
+                        if let Err(e) = handle_events(&state, e, buffer.clone(), runners.clone()).await {
+                            error!("Failed to handle event: {e}");
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Event bus error: {e}");
+                    }
+                }
+            }
             _instant = interval.tick() => {
-                if let Err(e) = calculate_fan_colors(&state, &event_bus, buffer.clone()).await {
+                if let Err(e) = calculate_fan_colors(&state, &event_bus, buffer.clone(), runners.clone()).await {
                     error!("Failed to update fan colors: {e}");
                 }
             }
         }
+    }
+    Ok(())
+}
+
+async fn handle_events(
+    state: &Arc<AppState>,
+    event: Event,
+    buffer: Arc<DoubleBuffer>,
+    runners: Arc<EffectStore>,
+) -> Result<()> {
+    match event {
+        Event::ConfigChangeDetected(_) => {
+            info!("Configuration change detected, recalculating fan colors");
+            // calculate_fan_colors(state, &EventBus::default(), buffer, runners).await?;
+        }
+        _ => debug!("Received event: {:?}", event),
     }
     Ok(())
 }
@@ -195,12 +245,11 @@ async fn calculate_fan_colors(
     state: &Arc<AppState>,
     _event_bus: &EventBus,
     buffer: Arc<DoubleBuffer>,
+    runners: Arc<EffectStore>,
 ) -> Result<()> {
-    let effect_runners = state.effect_runners.read().await;
-
     let mut write_buffer = buffer.get_write_buffer().await;
 
-    for runner in effect_runners.runners.iter() {
+    for runner in runners.runners.iter() {
         debug!("Calculating colors for effect: {}", runner.key());
         let instance = runner.value();
         if let Some(rgb) = instance.runner.next_rgb().await {
