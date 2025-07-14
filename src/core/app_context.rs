@@ -57,23 +57,4 @@ impl AppState {
     pub fn config_manager(&self) -> &Arc<ConfigManager> {
         &self.config_manager
     }
-
-    pub async fn update_mappings(&self, config: &Config) -> anyhow::Result<()> {
-        // let new_mapping = Mapping::load_mappings(&config.mappings);
-        // let new_clr_mappings = EffectMapping::build_color_mapping(&config.effect_mappings);
-        // let new_active_curves = CurveMapping::load_mappings(&config.active_curve_mappings);
-        // let new_effects = EffectStore::build_effect_store(&config.effects, &config.effect_mappings);
-        //
-        // let mut mapping = self.mapping.write().await;
-        // let mut color_mappings = self.effect_mappings.write().await;
-        // let mut active_curves = self.active_curves.write().await;
-        // let mut effect_runners = self.effect_runners.write().await;
-        //
-        // *mapping = new_mapping;
-        // *color_mappings = new_clr_mappings;
-        // *active_curves = new_active_curves;
-        // *effect_runners = new_effects;
-
-        Ok(())
-    }
 }

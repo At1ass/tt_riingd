@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
+use dashmap::DashMap;
 use tokio::sync::{broadcast, mpsc, oneshot};
+use tracing::info;
 
 // ============================================================================
 // SERVICE TYPES
@@ -414,6 +416,7 @@ impl ExecutableRequest for RollbackConfigUpdateCommand {
 // REQUEST STRUCTURE
 // ============================================================================
 
+#[derive(Debug)]
 pub struct Request {
     pub payload: Arc<RequestPayload>,
     pub response_channel: oneshot::Sender<Result<Response>>,
@@ -425,28 +428,43 @@ pub struct Request {
 
 pub struct MessageBroker {
     event_sender: broadcast::Sender<Event>,
-    service_handlers: HashMap<ServiceType, mpsc::Sender<Request>>,
+    service_handlers: Arc<DashMap<ServiceType, mpsc::Sender<Request>>>,
 }
 
 impl MessageBroker {
     pub fn new() -> Self {
+        info!("Initializing MessageBroker with default capacity");
         let (event_sender, _) = broadcast::channel(1000);
         Self {
             event_sender,
-            service_handlers: HashMap::new(),
+            service_handlers: Arc::new(DashMap::new()),
         }
     }
 
     pub fn with_capacity(capacity: usize) -> Self {
+        info!("Initializing MessageBroker with capacity: {}", capacity);
         let (event_sender, _) = broadcast::channel(capacity);
         Self {
             event_sender,
-            service_handlers: HashMap::new(),
+            service_handlers: Arc::new(DashMap::new()),
         }
     }
 
-    pub fn register_handler(&mut self, service_type: ServiceType, handler: mpsc::Sender<Request>) {
-        self.service_handlers.insert(service_type, handler);
+    pub fn register_handler(&self, service_type: ServiceType, handler: mpsc::Sender<Request>) {
+        let e = self.service_handlers.insert(service_type, handler);
+        if e.is_some() {
+            info!(
+                "Replaced existing handler for {:?} with new handler",
+                service_type
+            );
+        } else {
+            info!("Registered new handler for {:?}", service_type);
+        }
+
+        info!(
+            "Current handler count: {}",
+            self.service_handlers.len()
+        );
     }
 
     pub fn notify(&self, event: Event) -> Result<()> {
@@ -500,10 +518,27 @@ impl MessageBroker {
 
         let payload_arc = Arc::new(request);
 
+        info!(
+            "Executing request on multiple targets: {:?}",
+            target_services
+        );
+
+        info!("Total registered services: {}", self.service_handlers.len());
+
         let tasks: Vec<_> = target_services
             .iter()
             .filter_map(|&service_type| {
-                self.service_handlers.get(&service_type).map(|handler| {
+                info!("Checking for handler for service type: {:?}", service_type);
+                let handler = self.service_handlers.get(&service_type);
+
+                if handler.is_none() {
+                    info!("No handler found for service type: {:?}", service_type);
+                    return None;
+                }
+
+                handler.map(|handler| {
+                    info!("Found handler for service type: {:?}", service_type);
+                    let handler = handler.value().clone();
                     let (response_tx, response_rx) = oneshot::channel();
                     let req = Request {
                         payload: payload_arc.clone(), // Cheap Arc pointer clone (8 bytes)
@@ -514,6 +549,7 @@ impl MessageBroker {
                 })
             })
             .map(|(service_type, handler, req, response_rx)| {
+                info!("Spawning task for service type: {:?}", service_type);
                 tokio::spawn(async move {
                     let _ = handler.send(req).await;
                     (service_type, response_rx.await)
@@ -522,6 +558,10 @@ impl MessageBroker {
             .collect();
 
         let results = futures::future::join_all(tasks).await;
+        info!(
+            "Received responses for multiple targets: {:?}",
+            results.len()
+        );
         let mut responses = HashMap::new();
 
         for result in results.into_iter().flatten() {
@@ -547,7 +587,7 @@ impl Clone for MessageBroker {
     fn clone(&self) -> Self {
         Self {
             event_sender: self.event_sender.clone(),
-            service_handlers: self.service_handlers.clone(),
+            service_handlers: Arc::clone(&self.service_handlers),
         }
     }
 }

@@ -112,7 +112,7 @@ async fn run_broadcast_service(
     Ok(())
 }
 
-async fn broadcast_current_state(state: &Arc<AppState>, event_bus: &EventBus) {
+async fn broadcast_current_state(_state: &Arc<AppState>, event_bus: &EventBus) {
     // let sensor_data = state.sensor_data.read().await.clone();
     let sensor_data = HashMap::new();
 

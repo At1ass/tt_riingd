@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,7 +14,7 @@ use crate::{
     config::{CurveCfg, CurveMapping, Mapping},
     core::Event,
     drivers::commands::{BatchCommand, ExecutionMode},
-    event::EventBus,
+    event::{EventBus, RequestPayload, Response, ServiceType},
     mappings::FanRef,
     providers::traits::ServiceProvider,
     task_manager::TaskManager,
@@ -52,12 +53,32 @@ use crate::{
 /// # Ok(())
 /// # }
 /// ```
+struct MappingCache {
+    /// Cache for mapping data.
+    pub mappings: Mapping,
+    pub curves: Vec<CurveCfg>,
+    pub active_curves: CurveMapping,
+}
+
+impl MappingCache {
+    /// Creates a new empty mapping cache.
+    pub fn new() -> Self {
+        Self {
+            mappings: Mapping::default(),
+            curves: Vec::new(),
+            active_curves: CurveMapping::default(),
+        }
+    }
+}
+
 struct MonitoringCache {
     /// Cache for temperature data.
     pub sensor_data: RwLock<HashMap<String, f32>>,
-    pub mapping: Mapping,
-    pub curves: Vec<CurveCfg>,
-    pub active_curves: CurveMapping,
+    pub mapping_cache: Arc<ArcSwap<MappingCache>>,
+    pub new_mapping: Arc<ArcSwap<MappingCache>>,
+    // pub mapping: Mapping,
+    // pub curves: Vec<CurveCfg>,
+    // pub active_curves: CurveMapping,
 }
 
 pub struct MonitoringServiceProvider {
@@ -74,11 +95,14 @@ impl MonitoringServiceProvider {
             event_bus,
             cache: Arc::new(MonitoringCache {
                 sensor_data: RwLock::new(HashMap::new()),
-                mapping: Mapping::load_mappings(&config.get().await.mappings),
-                curves: config.get().await.curves.clone(),
-                active_curves: CurveMapping::load_mappings(
-                    &config.get().await.active_curve_mappings,
-                ),
+                mapping_cache: Arc::new(ArcSwap::from_pointee(MappingCache {
+                    mappings: Mapping::load_mappings(&config.get().await.mappings),
+                    curves: config.get().await.curves.clone(),
+                    active_curves: CurveMapping::load_mappings(
+                        &config.get().await.active_curve_mappings,
+                    ),
+                })),
+                new_mapping: Arc::new(ArcSwap::new(Arc::new(MappingCache::new()))),
             }),
         }
     }
@@ -156,7 +180,13 @@ async fn run_monitoring_service(
         state.config().await.tick_seconds,
     )));
 
+    info!(
+        "Starting monitoring service with tick interval of {} seconds",
+        state.config().await.tick_seconds
+    );
     let mut subcription = event_bus.subscribe();
+    let (rx, mut tx) = tokio::sync::mpsc::channel(100);
+    event_bus.register_handler(ServiceType::Monitoring, rx);
 
     loop {
         tokio::select! {
@@ -164,10 +194,23 @@ async fn run_monitoring_service(
                 info!("Monitoring service cancelled");
                 break;
             }
+            request = tx.recv() => {
+                match request {
+                    Some(req) => {
+                        info!("Received request: {:?}", req);
+                        let e = handle_event(&state, req.payload.clone(), cache.clone()).await;
+                        let _ = req.response_channel.send(e);
+                    },
+                    None => {
+                        info!("Command channel closed, exiting fan color service");
+                        break;
+                    }
+                }
+            }
             event = subcription.recv() => {
                 match event {
                     Ok(event) => {
-                        if let Err(e) = handle_events(&state, event, batch_data.clone(), cache.clone()).await {
+                        if let Err(e) = handle_notify(&state, event, batch_data.clone(), cache.clone()).await {
                             error!("Failed to handle event: {e}");
                         }
                     }
@@ -186,18 +229,45 @@ async fn run_monitoring_service(
     Ok(())
 }
 
-async fn handle_events(
+async fn handle_event(
     state: &Arc<AppState>,
+    request: Arc<RequestPayload>,
+    cache: Arc<MonitoringCache>,
+) -> Result<Response> {
+    match *request {
+        RequestPayload::PrepareConfigUpdate(_) => {
+            info!("Configuration change detected, reloading curves and mappings");
+            let config = state.config().await;
+            let new_mapping = MappingCache {
+                mappings: Mapping::load_mappings(&config.mappings),
+                curves: config.curves.clone(),
+                active_curves: CurveMapping::load_mappings(&config.active_curve_mappings),
+            };
+            cache.new_mapping.store(Arc::new(new_mapping));
+            Ok(Response::Success)
+        }
+        _ => {
+            debug!("Unhandled event: {:?}", request);
+            Err(anyhow::anyhow!("Unhandled event: {:?}", request))
+        }
+    }
+}
+
+async fn handle_notify(
+    _state: &Arc<AppState>,
     event: Event,
-    batch_data: Arc<RwLock<MonitoringBuffer>>,
+    _batch_data: Arc<RwLock<MonitoringBuffer>>,
     cache: Arc<MonitoringCache>,
 ) -> Result<()> {
     match event {
-        Event::ConfigChangeDetected(_) => {
-            info!("Configuration change detected, reloading curves and mappings");
+        Event::CommitConfigUpdate { .. } => {
+            info!("Committing new configuration");
+            cache.mapping_cache.store(cache.new_mapping.load_full());
+        }
+        Event::RollbackConfigUpdate { .. } => {
+            info!("Rolling back configuration to previous state");
         }
         _ => {
-            // Handle other events if necessary
             debug!("Unhandled event: {:?}", event);
         }
     }
@@ -210,9 +280,9 @@ async fn calculate_fan_speed(
     temp: f32,
     cache: &Arc<MonitoringCache>,
 ) -> Result<u8> {
-    let curve_registry: &Vec<_> = &cache.curves;
+    let curve_registry: &Vec<_> = &cache.mapping_cache.load().curves;
 
-    let active_curves = &cache.active_curves;
+    let active_curves = &cache.mapping_cache.load().active_curves;
 
     let curve_name = active_curves
         .get_curve_for_fan(&FanRef {
@@ -253,9 +323,12 @@ async fn collect_and_process_temperatures(
                 batch_data.temp_data.insert(sensor_name.clone(), temp);
                 debug!("Temperature of {sensor_name}: {temp:.2}°C");
 
-                // let batch_data = batch_data.batch_data.entry(controller_id.clone()).or_default();
-                // for fan in state.mapping.read().await.fans_for_sensor(&sensor_name) {
-                for fan in cache.mapping.fans_for_sensor(&sensor_name) {
+                for fan in cache
+                    .mapping_cache
+                    .load()
+                    .mappings
+                    .fans_for_sensor(&sensor_name)
+                {
                     let controller_id = &fan.controller_id;
                     let channel = u8::try_from(fan.channel)
                         .map_err(|_| anyhow::anyhow!("Channel {} too large for u8", fan.channel))?;
@@ -267,7 +340,6 @@ async fn collect_and_process_temperatures(
                     if let Some(entry) = batch_data.batch_data.get_mut(controller_id) {
                         entry.push((channel as usize, speed));
                     } else {
-                        // If the controller is not in the batch data, create a new entry
                         batch_data
                             .batch_data
                             .entry(controller_id.clone())
@@ -293,13 +365,8 @@ async fn collect_and_process_temperatures(
         .await
         .context("Failed to update fan speeds in batch")?;
 
-    // *state.sensor_data.write().await = batch_data.temp_data.clone();
     *cache.sensor_data.write().await = batch_data.temp_data.clone();
 
-    // if let Err(e) = event_bus.publish(Event::TemperatureChanged(temperatures)) {
-    //     error!("Failed to publish temperature event: {e}");
-    // }
-    //
     Ok(())
 }
 

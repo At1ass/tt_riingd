@@ -13,4 +13,5 @@ pub use async_trait::async_trait;
 mod config_watcher_test;
 mod dbus_test;
 mod fan_color_test;
+mod hot_reload_test;
 mod monitoring_test; 

@@ -356,36 +356,6 @@ impl SystemCoordinator {
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
     }
 
-    /// Handles PrepareConfigUpdate requests for the Coordinator service
-    ///
-    /// The Coordinator itself needs to prepare for config updates by validating
-    /// that the new configuration is structurally sound.
-    async fn handle_prepare_config_update(&self, transaction_id: u64) -> Result<Response> {
-        info!(
-            "Coordinator: Preparing config update for transaction {}",
-            transaction_id
-        );
-
-        if let Some(state) = &self.shared_state {
-            // Validate that the new configuration is structurally sound
-            let config = state.config_manager().get().await;
-
-            // TODO: Add specific validation logic here
-            // For now, we just check that config is loaded
-            if config.controllers.is_empty() {
-                return Ok(Response::Error("No controllers configured".to_string()));
-            }
-
-            info!(
-                "Coordinator: Config validation successful for transaction {}",
-                transaction_id
-            );
-            Ok(Response::Success)
-        } else {
-            Ok(Response::Error("System state not initialized".to_string()))
-        }
-    }
-
     /// Handles hot-reloadable configuration changes using 2PC through MessageBroker.
     ///
     /// This implements a Two-Phase Commit protocol:

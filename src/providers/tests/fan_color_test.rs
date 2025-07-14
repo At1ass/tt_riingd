@@ -43,12 +43,19 @@ async fn create_simple_mock_app_state() -> Arc<AppState> {
     Arc::new(AppState::new(config_manager).await.unwrap())
 }
 
+fn create_test_config_manager() -> crate::config::ConfigManager {
+    let config = Config::default();
+    crate::config::ConfigManager::new(config, std::path::PathBuf::from("/tmp/test.yml"))
+}
+
 #[tokio::test]
 async fn fan_color_service_provider_creation() {
     let state = create_simple_mock_app_state().await;
     let event_bus = EventBus::new();
+    let config = Config::default();
+    let config_manager = crate::config::ConfigManager::new(config, std::path::PathBuf::from("/tmp/test.yml"));
 
-    let provider = FanColorControlServiceProvider::new(state, event_bus);
+    let provider = FanColorControlServiceProvider::new(state, event_bus, &config_manager).await;
 
     std::assert_eq!(provider.name(), "FanColorService");
     std::assert_eq!(provider.priority(), 4);
@@ -60,8 +67,10 @@ async fn fan_color_service_starts_successfully() {
     let state = create_simple_mock_app_state().await;
     let event_bus = EventBus::new();
     let mut task_manager = TaskManager::new();
+    let config = Config::default();
+    let config_manager = crate::config::ConfigManager::new(config, std::path::PathBuf::from("/tmp/test.yml"));
 
-    let provider = FanColorControlServiceProvider::new(state, event_bus);
+    let provider = FanColorControlServiceProvider::new(state, event_bus, &config_manager).await;
     let result = provider.start(&mut task_manager).await;
 
     assert!(result.is_ok());
@@ -78,8 +87,10 @@ async fn fan_color_service_responds_to_cancellation() {
     let state = create_simple_mock_app_state().await;
     let event_bus = EventBus::new();
     let mut task_manager = TaskManager::new();
+    let config = Config::default();
+    let config_manager = crate::config::ConfigManager::new(config, std::path::PathBuf::from("/tmp/test.yml"));
 
-    let provider = FanColorControlServiceProvider::new(state, event_bus);
+    let provider = FanColorControlServiceProvider::new(state, event_bus, &config_manager).await;
     provider.start(&mut task_manager).await.unwrap();
 
     // Verify service is running
