@@ -81,7 +81,7 @@ impl EffectInstance {
                 .targets
                 .iter()
                 .map(|t| FanRef {
-                    controller_id: t.controller as usize,
+                    controller_id: t.controller_id.clone(),
                     channel: t.fan_idx as usize,
                 })
                 .collect();

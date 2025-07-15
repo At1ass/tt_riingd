@@ -18,7 +18,7 @@ use mocks::{
 
 use tt_riingd::{
     config::CurveCfg,
-    event::{Event, EventBus},
+    core::event::{Event, MessageBroker},
 };
 
 /// Test complete application startup workflow.
@@ -316,11 +316,11 @@ async fn test_application_shutdown() -> Result<()> {
     mock_app_state.set_sensor_data("cpu_temp", 55.0).await;
     mock_app_state.set_sensor_data("gpu_temp", 42.0).await;
 
-    // Act: Simulate graceful shutdown using EventBus
-    let event_bus = EventBus::new();
+    // Act: Simulate graceful shutdown using MessageBroker
+    let event_bus = MessageBroker::new();
     let mut receiver = event_bus.subscribe();
 
-    event_bus.publish(Event::SystemShutdown)?;
+    event_bus.notify(Event::SystemShutdown)?;
 
     // Assert: Verify shutdown event received
     let shutdown_event = timeout(Duration::from_millis(100), receiver.recv())
@@ -349,7 +349,7 @@ async fn test_application_shutdown() -> Result<()> {
 #[tokio::test]
 async fn test_event_system_lifecycle() -> Result<()> {
     // Arrange: Setup event system
-    let event_bus = EventBus::new();
+    let event_bus = MessageBroker::new();
     let mut receiver = event_bus.subscribe();
 
     // Test event sequence
@@ -357,7 +357,7 @@ async fn test_event_system_lifecycle() -> Result<()> {
 
     // Act: Publish events in sequence
     for event in events {
-        event_bus.publish(event)?;
+        event_bus.notify(event)?;
     }
 
     // Assert: Verify all events received
@@ -396,9 +396,9 @@ async fn test_mock_hardware_integration() -> Result<()> {
         .returning(|| Ok((2, 1, 0)));
 
     mock_controller
-        .expect_update_channel()
+        .expect_update_speed_batch()
         .times(3)
-        .returning(|_, _, _| Ok(()));
+        .returning(|_| Ok(()));
 
     mock_sensor
         .expect_sensor_key()
@@ -427,7 +427,7 @@ async fn test_mock_hardware_integration() -> Result<()> {
         let fan_speed = ((temperature - 20.0) * 2.0).clamp(0.0, 100.0) as u8;
 
         mock_controller
-            .update_channel(i, temperature, fan_speed)
+            .update_speed_batch(vec![(i, fan_speed)])
             .await?;
     }
 

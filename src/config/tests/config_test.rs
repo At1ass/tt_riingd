@@ -33,7 +33,7 @@ mod fixtures {
             id: "test_controller".to_string(),
             usb: UsbSelector {
                 vid: 0x264a,
-                pid: 0x2330,
+                pid: 0x232B, // Use supported PID
                 serial: None,
             },
             fans: vec![FanCfg {
@@ -82,7 +82,7 @@ controllers:
     id: "controller1"
     usb:
       vid: 0x264a
-      pid: 0x2330
+      pid: 0x232B
     fans:
       - idx: 1
         name: "CPU Fan"
@@ -101,13 +101,13 @@ sensors:
 mappings:
   - sensor: "cpu_temp"
     targets:
-      - controller: 1
+      - controller_id: "1"
         fan_idx: 1
 
 active_curve_mappings:
   - curve: "constant_50"
     targets:
-      - controller: 1
+      - controller_id: "1"
         fan_idx: 1
 
 effects:
@@ -118,7 +118,7 @@ effects:
 effect_mappings:
   - effect: "red"
     targets:
-      - controller: 1
+      - controller_id: "1"
         fan_idx: 1
 "#
     }
@@ -230,7 +230,7 @@ mod controller_tests {
         let ControllerCfg::RiingQuad { id, usb, fans } = controller;
         assert_eq!(id, "test_controller");
         assert_eq!(usb.vid, 0x264a);
-        assert_eq!(usb.pid, 0x2330);
+        assert_eq!(usb.pid, 0x232B);
         assert!(usb.serial.is_none());
         assert_eq!(fans.len(), 1);
         assert_eq!(fans[0].idx, 1);
@@ -507,7 +507,15 @@ mod config_manager_tests {
 
         let config = manager.get().await;
         assert_eq!(config.version, 1);
-        assert_eq!(config.controllers.len(), 1);
+        // Registry может добавить autodetect контроллеры, проверяем что есть минимум 1
+        assert!(!config.controllers.is_empty());
+        // Проверяем что наш тестовый контроллер на месте
+        assert!(
+            config
+                .controllers
+                .iter()
+                .any(|c| c.get_id() == "controller1")
+        );
     }
 
     #[tokio::test]
@@ -595,8 +603,8 @@ mod property_tests {
 
         #[test]
         fn test_fan_target_valid_indices(controller in 1u8..=255, fan_idx in 1u8..=255) {
-            let target = FanTarget { controller, fan_idx };
-            assert_eq!(target.controller, controller);
+            let target = FanTarget { controller_id: controller.to_string(), fan_idx };
+            assert_eq!(target.controller_id, controller.to_string());
             assert_eq!(target.fan_idx, fan_idx);
         }
 

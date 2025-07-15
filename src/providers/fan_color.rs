@@ -1,17 +1,19 @@
 use anyhow::Result;
+use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
-use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard, mpsc};
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
-use crate::{
-    app_context::AppState, event::EventBus, providers::traits::ServiceProvider,
-    task_manager::TaskManager,
-};
+use crate::ConfigManager;
+use crate::config::EffectStore;
+use crate::core::event::{Event, MessageBroker, RequestPayload, Response, ServiceType};
+use crate::drivers::commands::{BatchCommand, ExecutionMode};
+use crate::{app_context::AppState, providers::traits::ServiceProvider, task_manager::TaskManager};
 
 /// RGB fan lighting control service provider.
 ///
@@ -43,23 +45,33 @@ use crate::{
 /// ```no_run
 /// use std::sync::Arc;
 /// use tt_riingd::providers::FanColorControlServiceProvider;
-/// use tt_riingd::event::EventBus;
-/// use tt_riingd::app_context::AppState;
+/// use tt_riingd::core::event::MessageBroker;
+/// use tt_riingd::core::AppState;
+/// use tt_riingd::config::{Config, ConfigManager};
 ///
 /// # async fn example(state: Arc<AppState>) -> anyhow::Result<()> {
-/// let event_bus = EventBus::new();
-/// let provider = FanColorControlServiceProvider::new(state, event_bus);
+/// let event_bus = MessageBroker::new();
+/// let config = Config::default();
+/// let config_manager = ConfigManager::load(None).await?;
+/// let provider = FanColorControlServiceProvider::new(state, event_bus, &config_manager).await;
 /// // Use with TaskManager to start the service
 /// # Ok(())
 /// # }
 /// ```
+struct FanColorServiceCache {
+    pub runners: Arc<ArcSwap<EffectStore>>,
+    pub new_runners: Arc<ArcSwap<EffectStore>>,
+}
+
 pub struct FanColorControlServiceProvider {
     state: Arc<AppState>,
-    event_bus: EventBus,
+    event_bus: MessageBroker,
+    cache: FanColorServiceCache,
 }
 
 type ControllerColorBuffer = Vec<(usize, Vec<(u8, u8, u8)>)>;
-type ConrollerId = u8;
+// type ConrollerId = u8;
+type ConrollerId = String;
 type Buffer = HashMap<ConrollerId, ControllerColorBuffer>;
 
 struct DoubleBuffer {
@@ -93,8 +105,22 @@ impl DoubleBuffer {
 
 impl FanColorControlServiceProvider {
     /// Creates a new fan color control service provider.
-    pub fn new(state: Arc<AppState>, event_bus: EventBus) -> Self {
-        Self { state, event_bus }
+    pub async fn new(
+        state: Arc<AppState>,
+        event_bus: MessageBroker,
+        config: &ConfigManager,
+    ) -> Self {
+        Self {
+            state,
+            event_bus,
+            cache: FanColorServiceCache {
+                runners: Arc::new(ArcSwap::new(Arc::new(EffectStore::build_effect_store(
+                    &config.get().await.effects,
+                    &config.get().await.effect_mappings,
+                )))),
+                new_runners: Arc::new(ArcSwap::new(Arc::new(EffectStore::default()))),
+            },
+        }
     }
 }
 
@@ -103,6 +129,8 @@ impl ServiceProvider for FanColorControlServiceProvider {
     async fn start(&self, task_manager: &mut TaskManager) -> Result<()> {
         let state = self.state.clone();
         let event_bus = self.event_bus.clone();
+        let runners = self.cache.runners.clone();
+        let new_runners = self.cache.new_runners.clone();
 
         let double_buffer = Arc::new(DoubleBuffer::new());
         task_manager
@@ -111,7 +139,15 @@ impl ServiceProvider for FanColorControlServiceProvider {
                 let event_bus = event_bus.clone();
                 let buffer = double_buffer.clone();
                 |cancel_token| async move {
-                    run_calculate_colors_service(state, event_bus, buffer, cancel_token).await
+                    run_calculate_colors_service(
+                        state,
+                        event_bus,
+                        buffer,
+                        cancel_token,
+                        runners,
+                        new_runners,
+                    )
+                    .await
                 }
             })
             .await?;
@@ -143,11 +179,17 @@ impl ServiceProvider for FanColorControlServiceProvider {
 
 async fn run_calculate_colors_service(
     state: Arc<AppState>,
-    event_bus: EventBus,
+    event_bus: MessageBroker,
     buffer: Arc<DoubleBuffer>,
     cancel_token: CancellationToken,
+    runners: Arc<ArcSwap<EffectStore>>,
+    new_runners: Arc<ArcSwap<EffectStore>>,
 ) -> Result<()> {
-    let mut interval = interval(Duration::from_millis(16));
+    let mut interval = interval(Duration::from_millis(50));
+    let mut subscriber = event_bus.subscribe();
+
+    let (rx, mut command_tx) = mpsc::channel(100);
+    event_bus.register_handler(ServiceType::FanColor, rx);
 
     loop {
         tokio::select! {
@@ -155,8 +197,34 @@ async fn run_calculate_colors_service(
                 info!("Fan color service cancelled");
                 break;
             }
+            request = command_tx.recv() => {
+                match request {
+                    Some(req) => {
+                        info!("Received request: {:?}", req);
+                        let e = handle_event(&state, req.payload.clone(), runners.clone(), new_runners.clone()).await;
+                        let _ = req.response_channel.send(e);
+                    },
+                    None => {
+                        info!("Command channel closed, exiting fan color service");
+                        break;
+                    }
+                }
+            }
+            notify = subscriber.recv() => {
+                match notify {
+                    Ok(e) => {
+                        debug!("Received event: {:?}", e);
+                        if let Err(e) = handle_notify(&state, e, runners.clone(), new_runners.clone()).await {
+                            error!("Failed to handle event: {e}");
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Event bus error: {e}");
+                    }
+                }
+            }
             _instant = interval.tick() => {
-                if let Err(e) = calculate_fan_colors(&state, &event_bus, buffer.clone()).await {
+                if let Err(e) = calculate_fan_colors(&state, &event_bus, buffer.clone(), runners.clone()).await {
                     error!("Failed to update fan colors: {e}");
                 }
             }
@@ -165,9 +233,56 @@ async fn run_calculate_colors_service(
     Ok(())
 }
 
+async fn handle_event(
+    state: &Arc<AppState>,
+    event: Arc<RequestPayload>,
+    _runners: Arc<ArcSwap<EffectStore>>,
+    new_runners: Arc<ArcSwap<EffectStore>>,
+) -> Result<Response> {
+    match *event {
+        RequestPayload::PrepareConfigUpdate(_) => {
+            info!("Configuration change detected, recalculating fan colors");
+            rebuild_effects(state, new_runners.clone()).await;
+            Ok(Response::Success)
+        }
+        _ => {
+            warn!("Unhandled request type: {:?}", event);
+            Err(anyhow::anyhow!("Unhandled request type: {:?}", event))
+        }
+    }
+}
+
+async fn rebuild_effects(state: &Arc<AppState>, new_runners: Arc<ArcSwap<EffectStore>>) {
+    info!("Rebuilding effect runners");
+    let config_manager = state.config_manager.get().await;
+    new_runners.store(Arc::new(EffectStore::build_effect_store(
+        &config_manager.effects.clone(),
+        &config_manager.effect_mappings.clone(),
+    )));
+}
+
+async fn handle_notify(
+    _state: &Arc<AppState>,
+    event: Event,
+    runners: Arc<ArcSwap<EffectStore>>,
+    new_runners: Arc<ArcSwap<EffectStore>>,
+) -> Result<()> {
+    match event {
+        Event::CommitConfigUpdate { transaction_id: _ } => {
+            info!("Committing configuration update, rebuilding effect runners");
+            runners.store(new_runners.load_full());
+        }
+        Event::RollbackConfigUpdate { transaction_id: _ } => {
+            info!("Rolling back configuration update, restoring previous effect runners");
+        }
+        _ => debug!("Received event: {:?}", event),
+    }
+    Ok(())
+}
+
 async fn run_transmit_color_changes(
     state: Arc<AppState>,
-    event_bus: EventBus,
+    event_bus: MessageBroker,
     buffer: Arc<DoubleBuffer>,
     cancel_token: CancellationToken,
 ) -> Result<()> {
@@ -191,19 +306,21 @@ async fn run_transmit_color_changes(
 
 async fn calculate_fan_colors(
     state: &Arc<AppState>,
-    _event_bus: &EventBus,
+    _event_bus: &MessageBroker,
     buffer: Arc<DoubleBuffer>,
+    runners: Arc<ArcSwap<EffectStore>>,
 ) -> Result<()> {
-    let effect_runners = state.effect_runners.read().await;
-
     let mut write_buffer = buffer.get_write_buffer().await;
+    let runners = runners.load();
 
-    for runner in effect_runners.runners.iter() {
+    for runner in runners.runners.iter() {
         debug!("Calculating colors for effect: {}", runner.key());
         let instance = runner.value();
         if let Some(rgb) = instance.runner.next_rgb().await {
             for fan_ref in &instance.targets {
-                let buf = write_buffer.entry(fan_ref.controller_id as u8).or_default();
+                let buf = write_buffer
+                    .entry(fan_ref.controller_id.clone())
+                    .or_default();
 
                 if !buf
                     .iter_mut()
@@ -213,7 +330,8 @@ async fn calculate_fan_colors(
                         .controllers
                         .read()
                         .await
-                        .controller_led_count(fan_ref.controller_id as u8)
+                        .led_count(&fan_ref.controller_id)
+                        .await
                     {
                         buf.push((fan_ref.channel, vec![(0, 0, 0); led]));
                     } else {
@@ -252,46 +370,20 @@ async fn calculate_fan_colors(
 
 async fn transmit_color_changes(
     state: Arc<AppState>,
-    _event_bus: &EventBus,
+    _event_bus: &MessageBroker,
     buffer: Arc<DoubleBuffer>,
 ) -> Result<()> {
-    let tasks = buffer
-        .get_read_buffer()
+    let read_buffer = buffer.get_read_buffer().await;
+
+    state
+        .controllers
+        .read()
         .await
-        .iter()
-        .map(|(controller_id, color_buffer)| {
-            debug!(
-                "Transmitting color changes for controller {}",
-                controller_id
-            );
-            let value = state.clone();
-            let controller_id = *controller_id;
-            let color_buffer = color_buffer.clone();
-            tokio::spawn({
-                {
-                    async move {
-                        if let Err(e) = value
-                            .controllers
-                            .read()
-                            .await
-                            .update_channel_color_batch(controller_id, color_buffer)
-                            .await
-                        {
-                            error!("Failed to set color on controller {}: {e}", controller_id);
-                        } else {
-                            debug!(
-                                "Successfully updated colors for controller {}",
-                                controller_id
-                            );
-                        }
-                    }
-                }
-            })
-        })
-        .collect::<Vec<_>>();
-
-    futures::future::join_all(tasks).await;
-
+        .batch_update(
+            BatchCommand::SetColors { data: &read_buffer },
+            ExecutionMode::Blocking,
+        )
+        .await?;
     Ok(())
 }
 

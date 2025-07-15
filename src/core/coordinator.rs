@@ -8,11 +8,12 @@ use tracing::{error, info, warn};
 use crate::{
     app_context::AppState,
     config::ConfigManager,
-    event::{ConfigChangeType, Event, EventBus},
+    drivers::commands::{BatchCommand, ExecutionMode},
+    event::{ConfigChangeType, Event, EventBus, PrepareConfigUpdateCommand, Response},
     providers::{
         AppStateProvider, AsyncProvider, BroadcastServiceProvider, ConfigWatcherServiceProvider,
         DBusServiceProvider, FanColorControlServiceProvider, MonitoringServiceProvider,
-        ServiceProvider,
+        ServiceProvider, UdevWatcherServiceProvider,
     },
     task_manager::TaskManager,
 };
@@ -32,6 +33,7 @@ pub struct SystemCoordinator {
     event_bus: EventBus,
     shared_state: Option<Arc<AppState>>,
     service_providers: Vec<Box<dyn ServiceProvider>>,
+    transaction_counter: std::sync::atomic::AtomicU64,
 }
 
 impl Default for SystemCoordinator {
@@ -50,6 +52,7 @@ impl SystemCoordinator {
             event_bus,
             shared_state: None,
             service_providers: Vec::new(),
+            transaction_counter: std::sync::atomic::AtomicU64::new(1),
         }
     }
 
@@ -78,11 +81,12 @@ impl SystemCoordinator {
             .controllers
             .read()
             .await
-            .send_init()
+            .batch_update(BatchCommand::Init, ExecutionMode::Blocking)
+            // .send_init()
             .await
             .context("Failed to initialize hardware controllers")?;
 
-        self.register_service_providers(state.clone())
+        self.register_service_providers(state.clone(), &config_manager)
             .await
             .context("Failed to register service providers")?;
 
@@ -91,21 +95,28 @@ impl SystemCoordinator {
     }
 
     /// Registers all service providers with prioritization.
-    async fn register_service_providers(&mut self, state: Arc<AppState>) -> Result<()> {
+    async fn register_service_providers(
+        &mut self,
+        state: Arc<AppState>,
+        config: &ConfigManager,
+    ) -> Result<()> {
         let mut providers: Vec<Box<dyn ServiceProvider>> = vec![
-            Box::new(MonitoringServiceProvider::new(
-                state.clone(),
-                self.event_bus.clone(),
-            )),
+            Box::new(
+                MonitoringServiceProvider::new(state.clone(), self.event_bus.clone(), config).await,
+            ),
             Box::new(BroadcastServiceProvider::new(
                 state.clone(),
                 self.event_bus.clone(),
             )),
-            Box::new(FanColorControlServiceProvider::new(
+            Box::new(
+                FanColorControlServiceProvider::new(state.clone(), self.event_bus.clone(), config)
+                    .await,
+            ),
+            Box::new(ConfigWatcherServiceProvider::new(
                 state.clone(),
                 self.event_bus.clone(),
             )),
-            Box::new(ConfigWatcherServiceProvider::new(
+            Box::new(UdevWatcherServiceProvider::new(
                 state.clone(),
                 self.event_bus.clone(),
             )),
@@ -225,6 +236,32 @@ impl SystemCoordinator {
                     .context("Failed to shutdown gracefully after SystemShutdown event")?;
                 return Err(anyhow::anyhow!("System shutdown requested"));
             }
+            Ok(Event::DeviceConnected {
+                vendor_id,
+                product_id,
+                serial_number,
+            }) => {
+                info!(
+                    "Device connected: vendor_id={}, product_id={}, serial_number={:?}",
+                    vendor_id, product_id, serial_number
+                );
+                self.handle_device_connected(vendor_id, product_id, serial_number)
+                    .await
+                    .context("Failed to handle device connected event")?;
+            }
+            Ok(Event::DeviceDisconnected {
+                vendor_id,
+                product_id,
+                serial_number,
+            }) => {
+                info!(
+                    "Device disconnected: vendor_id={}, product_id={}, serial_number={:?}",
+                    vendor_id, product_id, serial_number
+                );
+                self.handle_device_disconnected(vendor_id, product_id, serial_number)
+                    .await
+                    .context("Failed to handle device disconnected event")?;
+            }
             Ok(event) => {
                 info!("Received event: {event:?}");
             }
@@ -235,6 +272,56 @@ impl SystemCoordinator {
                 warn!("Event bus lagged by {n} messages");
             }
         }
+        Ok(())
+    }
+
+    async fn handle_device_connected(
+        &self,
+        vendor_id: u16,
+        product_id: u16,
+        serial_number: Option<String>,
+    ) -> Result<()> {
+        info!(
+            "Handling device connected: vendor_id={}, product_id={}, serial_number={:?}",
+            vendor_id, product_id, serial_number
+        );
+
+        if let Some(state) = &self.shared_state {
+            state
+                .controllers
+                .write()
+                .await
+                .device_connected(vendor_id, product_id, serial_number)
+                .await?
+        } else {
+            warn!("Cannot handle device connected event: system state not initialized");
+        }
+
+        Ok(())
+    }
+
+    async fn handle_device_disconnected(
+        &self,
+        vendor_id: u16,
+        product_id: u16,
+        serial_number: Option<String>,
+    ) -> Result<()> {
+        info!(
+            "Handling device disconnected: vendor_id={}, product_id={}, serial_number={:?}",
+            vendor_id, product_id, serial_number
+        );
+
+        if let Some(state) = &self.shared_state {
+            state
+                .controllers
+                .write()
+                .await
+                .device_disconnected(vendor_id, product_id, serial_number)
+                .await?
+        } else {
+            warn!("Cannot handle device disconnected event: system state not initialized");
+        }
+
         Ok(())
     }
 
@@ -263,32 +350,105 @@ impl SystemCoordinator {
         }
     }
 
-    /// Handles hot-reloadable configuration changes.
+    /// Generates a unique transaction ID for 2PC operations
+    fn generate_transaction_id(&self) -> u64 {
+        self.transaction_counter
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Handles hot-reloadable configuration changes using 2PC through MessageBroker.
+    ///
+    /// This implements a Two-Phase Commit protocol:
+    /// 1. Phase 1: Send PrepareConfigUpdate to all services via execute()
+    /// 2. Phase 2: Send CommitConfigUpdate or RollbackConfigUpdate via notify()
     async fn handle_hot_reload(&self) -> Result<()> {
-        info!("Applying hot-reloadable configuration changes...");
+        info!("Starting 2PC hot configuration reload...");
 
         if let Some(state) = &self.shared_state {
-            // Reload only the hot-reloadable parts of configuration
             state
                 .config_manager()
                 .reload()
                 .await
                 .context("Failed to reload configuration")?;
 
-            // Update mappings, curves and other hot-reloadable components
-            let new_config = state.config_manager().get().await;
+            let transaction_id = self.generate_transaction_id();
+            info!("Starting config transaction {}", transaction_id);
 
-            state
-                .update_mappings(&new_config)
+            info!("Phase 1: Preparing config update across all services...");
+
+            match self
+                .event_bus
+                .execute(PrepareConfigUpdateCommand { transaction_id })
                 .await
-                .context("Failed to update mappings")?;
+            {
+                Ok(results) => {
+                    let mut success_count = 0;
+                    let mut failure_count = 0;
+                    let mut failed_services = Vec::new();
 
-            // Note: Controllers and sensors are NOT reinitialized for hot reload
-            // Only mappings, curves, and colors are updated
-            info!("Updated configuration for curves, mappings, and colors");
-            info!("Hot configuration reload completed successfully");
+                    for (service_type, response) in results {
+                        match response {
+                            Response::Success => {
+                                success_count += 1;
+                                info!("Service {:?}: Config preparation successful", service_type);
+                            }
+                            Response::Error(err) => {
+                                failure_count += 1;
+                                failed_services.push((service_type, err.clone()));
+                                error!(
+                                    "Service {:?}: Config preparation failed: {}",
+                                    service_type, err
+                                );
+                            }
+                            _ => {
+                                failure_count += 1;
+                                failed_services
+                                    .push((service_type, "Unexpected response type".to_string()));
+                                error!("Service {:?}: Unexpected response type", service_type);
+                            }
+                        }
+                    }
+
+                    if failure_count == 0 {
+                        info!(
+                            "Phase 2: All services prepared successfully ({} services) - committing transaction {}",
+                            success_count, transaction_id
+                        );
+
+                        self.event_bus
+                            .notify(crate::event::Event::CommitConfigUpdate { transaction_id })?;
+                        info!("Hot configuration reload completed successfully!");
+                    } else {
+                        warn!(
+                            "Phase 2: {} service(s) failed preparation - rolling back transaction {}",
+                            failure_count, transaction_id
+                        );
+
+                        for (service, error) in &failed_services {
+                            warn!("  - Service {:?}: {}", service, error);
+                        }
+
+                        self.event_bus
+                            .notify(crate::event::Event::RollbackConfigUpdate { transaction_id })?;
+
+                        return Err(anyhow::anyhow!(
+                            "Config reload failed: {} services could not prepare the new configuration",
+                            failure_count
+                        ));
+                    }
+                }
+                Err(e) => {
+                    error!("Phase 1: Failed to execute PrepareConfigUpdate: {}", e);
+
+                    self.event_bus
+                        .notify(crate::event::Event::RollbackConfigUpdate { transaction_id })?;
+
+                    return Err(e).context("Failed to prepare config update across services");
+                }
+            }
         } else {
             warn!("Cannot reload config: system state not initialized");
+            return Err(anyhow::anyhow!("System state not initialized"));
         }
 
         Ok(())
@@ -300,6 +460,12 @@ impl SystemCoordinator {
 
         if let Err(e) = self.task_manager.shutdown_all().await {
             error!("Error during task shutdown: {}", e);
+        }
+
+        if let Some(state) = &self.shared_state {
+            state.controllers.write().await.shutdown().await;
+        } else {
+            warn!("Cannot shutdown: system state not initialized");
         }
 
         info!("Shutdown complete");

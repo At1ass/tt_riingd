@@ -3,7 +3,10 @@
 use super::super::fan_color::*;
 use crate::{
     config::{Config, EffectCfg, EffectMappingCfg, FanTarget},
-    core::{AppState, EventBus, TaskManager, event::Event},
+    core::{
+        AppState, TaskManager,
+        event::{Event, MessageBroker},
+    },
     providers::traits::ServiceProvider,
 };
 use std::{collections::HashMap, sync::Arc, time::Duration};
@@ -15,11 +18,11 @@ async fn create_mock_app_state_with_colors() -> Arc<AppState> {
             effect: "red".to_string(),
             targets: vec![
                 FanTarget {
-                    controller: 1,
+                    controller_id: "1".to_string(),
                     fan_idx: 1,
                 },
                 FanTarget {
-                    controller: 1,
+                    controller_id: "1".to_string(),
                     fan_idx: 2,
                 },
             ],
@@ -43,12 +46,20 @@ async fn create_simple_mock_app_state() -> Arc<AppState> {
     Arc::new(AppState::new(config_manager).await.unwrap())
 }
 
+fn create_test_config_manager() -> crate::config::ConfigManager {
+    let config = Config::default();
+    crate::config::ConfigManager::new(config, std::path::PathBuf::from("/tmp/test.yml"))
+}
+
 #[tokio::test]
 async fn fan_color_service_provider_creation() {
     let state = create_simple_mock_app_state().await;
-    let event_bus = EventBus::new();
+    let event_bus = MessageBroker::new();
+    let config = Config::default();
+    let config_manager =
+        crate::config::ConfigManager::new(config, std::path::PathBuf::from("/tmp/test.yml"));
 
-    let provider = FanColorControlServiceProvider::new(state, event_bus);
+    let provider = FanColorControlServiceProvider::new(state, event_bus, &config_manager).await;
 
     std::assert_eq!(provider.name(), "FanColorService");
     std::assert_eq!(provider.priority(), 4);
@@ -58,10 +69,13 @@ async fn fan_color_service_provider_creation() {
 #[tokio::test]
 async fn fan_color_service_starts_successfully() {
     let state = create_simple_mock_app_state().await;
-    let event_bus = EventBus::new();
+    let event_bus = MessageBroker::new();
     let mut task_manager = TaskManager::new();
+    let config = Config::default();
+    let config_manager =
+        crate::config::ConfigManager::new(config, std::path::PathBuf::from("/tmp/test.yml"));
 
-    let provider = FanColorControlServiceProvider::new(state, event_bus);
+    let provider = FanColorControlServiceProvider::new(state, event_bus, &config_manager).await;
     let result = provider.start(&mut task_manager).await;
 
     assert!(result.is_ok());
@@ -76,10 +90,13 @@ async fn fan_color_service_starts_successfully() {
 #[tokio::test]
 async fn fan_color_service_responds_to_cancellation() {
     let state = create_simple_mock_app_state().await;
-    let event_bus = EventBus::new();
+    let event_bus = MessageBroker::new();
     let mut task_manager = TaskManager::new();
+    let config = Config::default();
+    let config_manager =
+        crate::config::ConfigManager::new(config, std::path::PathBuf::from("/tmp/test.yml"));
 
-    let provider = FanColorControlServiceProvider::new(state, event_bus);
+    let provider = FanColorControlServiceProvider::new(state, event_bus, &config_manager).await;
     provider.start(&mut task_manager).await.unwrap();
 
     // Verify service is running
@@ -97,11 +114,12 @@ async fn fan_color_service_responds_to_cancellation() {
 #[tokio::test]
 async fn fan_color_service_periodic_updates() {
     let state = create_mock_app_state_with_colors().await;
-    let event_bus = EventBus::new();
+    let event_bus = MessageBroker::new();
     let mut receiver = event_bus.subscribe();
     let mut task_manager = TaskManager::new();
 
-    let provider = FanColorControlServiceProvider::new(state, event_bus);
+    let config_manager = create_test_config_manager();
+    let provider = FanColorControlServiceProvider::new(state, event_bus, &config_manager).await;
     provider.start(&mut task_manager).await.unwrap();
 
     // Wait for at least one color update cycle (5 seconds interval)
@@ -110,11 +128,8 @@ async fn fan_color_service_periodic_updates() {
     // In test environment, service may not publish events immediately
     // This is acceptable as long as service is running
     match event {
-        Ok(Ok(Event::ColorChanged)) => {
-            // Expected color change event
-        }
         Ok(Ok(_)) => {
-            // Service is running and publishing other events
+            // Service is running and publishing events
         }
         Ok(Err(_)) | Err(_) => {
             // Timeout or error is acceptable in test environment
@@ -129,11 +144,13 @@ async fn fan_color_service_periodic_updates() {
 #[tokio::test]
 async fn fan_color_service_responds_to_temperature_events() {
     let state = create_mock_app_state_with_colors().await;
-    let event_bus = EventBus::new();
+    let event_bus = MessageBroker::new();
     let mut receiver = event_bus.subscribe();
     let mut task_manager = TaskManager::new();
 
-    let provider = FanColorControlServiceProvider::new(state, event_bus.clone());
+    let config_manager = create_test_config_manager();
+    let provider =
+        FanColorControlServiceProvider::new(state, event_bus.clone(), &config_manager).await;
     provider.start(&mut task_manager).await.unwrap();
 
     // Give service time to start
@@ -145,16 +162,13 @@ async fn fan_color_service_responds_to_temperature_events() {
         ("gpu_temp".to_string(), 65.0),
     ]);
     event_bus
-        .publish(Event::TemperatureChanged(temperatures))
+        .notify(Event::TemperatureChanged(temperatures))
         .unwrap();
 
     // Wait for color change response - increased timeout and allow for any event
     match timeout(Duration::from_secs(6), receiver.recv()).await {
-        Ok(Ok(Event::ColorChanged)) => {
-            // Expected color change response
-        }
         Ok(Ok(other_event)) => {
-            println!("Received other event: {other_event:?}");
+            println!("Received event: {other_event:?}");
             // Accept any event as service is running
         }
         Ok(Err(e)) => {
@@ -178,7 +192,7 @@ async fn fan_color_service_handles_missing_colors() {
         effect_mappings: vec![EffectMappingCfg {
             effect: "nonexistent_color".to_string(),
             targets: vec![FanTarget {
-                controller: 1,
+                controller_id: "1".to_string(),
                 fan_idx: 1,
             }],
         }],
@@ -192,10 +206,11 @@ async fn fan_color_service_handles_missing_colors() {
         Arc::new(AppState::new(config_manager).await.unwrap())
     };
 
-    let event_bus = EventBus::new();
+    let event_bus = MessageBroker::new();
     let mut task_manager = TaskManager::new();
 
-    let provider = FanColorControlServiceProvider::new(state, event_bus);
+    let config_manager = create_test_config_manager();
+    let provider = FanColorControlServiceProvider::new(state, event_bus, &config_manager).await;
     let result = provider.start(&mut task_manager).await;
 
     // Service should start successfully even with missing colors
@@ -230,10 +245,11 @@ async fn fan_color_service_handles_empty_color_mappings() {
         Arc::new(AppState::new(config_manager).await.unwrap())
     };
 
-    let event_bus = EventBus::new();
+    let event_bus = MessageBroker::new();
     let mut task_manager = TaskManager::new();
 
-    let provider = FanColorControlServiceProvider::new(state, event_bus);
+    let config_manager = create_test_config_manager();
+    let provider = FanColorControlServiceProvider::new(state, event_bus, &config_manager).await;
     let result = provider.start(&mut task_manager).await;
 
     // Service should start successfully with empty mappings
@@ -257,14 +273,14 @@ async fn fan_color_service_multiple_color_mappings() {
             EffectMappingCfg {
                 effect: "red".to_string(),
                 targets: vec![FanTarget {
-                    controller: 1,
+                    controller_id: "1".to_string(),
                     fan_idx: 1,
                 }],
             },
             EffectMappingCfg {
                 effect: "blue".to_string(),
                 targets: vec![FanTarget {
-                    controller: 1,
+                    controller_id: "1".to_string(),
                     fan_idx: 2,
                 }],
             },
@@ -288,11 +304,12 @@ async fn fan_color_service_multiple_color_mappings() {
         Arc::new(AppState::new(config_manager).await.unwrap())
     };
 
-    let event_bus = EventBus::new();
+    let event_bus = MessageBroker::new();
     let mut receiver = event_bus.subscribe();
     let mut task_manager = TaskManager::new();
 
-    let provider = FanColorControlServiceProvider::new(state, event_bus);
+    let config_manager = create_test_config_manager();
+    let provider = FanColorControlServiceProvider::new(state, event_bus, &config_manager).await;
     provider.start(&mut task_manager).await.unwrap();
 
     // Wait for periodic color update
@@ -300,11 +317,8 @@ async fn fan_color_service_multiple_color_mappings() {
 
     // In test environment, events may not be published immediately
     match event {
-        Ok(Ok(Event::ColorChanged)) => {
-            // Expected behavior
-        }
         Ok(Ok(_)) => {
-            // Service is running and publishing other events
+            // Service is running and publishing events
         }
         Ok(Err(_)) | Err(_) => {
             // Timeout is acceptable in test environment
@@ -319,12 +333,14 @@ async fn fan_color_service_multiple_color_mappings() {
 #[tokio::test]
 async fn fan_color_service_concurrent_events() {
     let state = create_mock_app_state_with_colors().await;
-    let event_bus = EventBus::new();
+    let event_bus = MessageBroker::new();
     let mut receiver1 = event_bus.subscribe();
     let mut receiver2 = event_bus.subscribe();
     let mut task_manager = TaskManager::new();
 
-    let provider = FanColorControlServiceProvider::new(state, event_bus.clone());
+    let config_manager = create_test_config_manager();
+    let provider =
+        FanColorControlServiceProvider::new(state, event_bus.clone(), &config_manager).await;
     provider.start(&mut task_manager).await.unwrap();
 
     // Give service time to start
@@ -334,7 +350,7 @@ async fn fan_color_service_concurrent_events() {
     for i in 0..3 {
         let temperatures = HashMap::from([("cpu_temp".to_string(), 50.0 + i as f32)]);
         event_bus
-            .publish(Event::TemperatureChanged(temperatures))
+            .notify(Event::TemperatureChanged(temperatures))
             .unwrap();
     }
 
@@ -353,10 +369,12 @@ async fn fan_color_service_concurrent_events() {
 async fn fan_color_service_error_resilience() {
     // Test that service continues running even if color updates fail
     let state = create_mock_app_state_with_colors().await;
-    let event_bus = EventBus::new();
+    let event_bus = MessageBroker::new();
     let mut task_manager = TaskManager::new();
 
-    let provider = FanColorControlServiceProvider::new(state, event_bus.clone());
+    let config_manager = create_test_config_manager();
+    let provider =
+        FanColorControlServiceProvider::new(state, event_bus.clone(), &config_manager).await;
     let result = provider.start(&mut task_manager).await;
 
     // Service should start successfully
@@ -389,7 +407,7 @@ async fn fan_color_service_error_resilience() {
 
     // Service should handle errors gracefully and continue
     let temperatures = HashMap::from([("invalid_sensor".to_string(), -999.0)]);
-    let result = event_bus.publish(Event::TemperatureChanged(temperatures));
+    let result = event_bus.notify(Event::TemperatureChanged(temperatures));
     match result {
         Ok(_) => {
             // Event published successfully

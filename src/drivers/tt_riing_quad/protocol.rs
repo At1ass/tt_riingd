@@ -1,4 +1,5 @@
 use anyhow::{Ok, Result, anyhow};
+use arrayvec::ArrayVec;
 
 /// Protocol constants for TT Riing Quad HID communication
 mod protocol_consts {
@@ -31,8 +32,10 @@ mod protocol_consts {
     pub const DATA_RPM_HIGH_OFFSET: usize = 4;
 }
 
+type PackerBuffer = ArrayVec<u8, { protocol_consts::RESPONSE_LEN }>;
+
 #[derive(Clone, Debug)]
-pub enum Command {
+pub enum Command<'a> {
     Init,
     GetFirmwareVersion,
     GetData {
@@ -45,11 +48,62 @@ pub enum Command {
     SetRgb {
         port: u8,
         mode: u8,
-        colors: Vec<(u8, u8, u8)>,
+        colors: &'a [(u8, u8, u8)],
     },
 }
 
-impl Command {
+impl Command<'_> {
+    pub fn encode(&self, buf: &mut PackerBuffer) -> Result<()> {
+        macro_rules! push {
+            ($data:expr) => {
+                buf.try_extend_from_slice($data)
+                    .map_err(|_| anyhow!("Failed to encode command"))
+            };
+        }
+        buf.clear();
+        match *self {
+            Command::Init => push!(&[
+                protocol_consts::PREFIX_0,
+                protocol_consts::PREFIX_1_FE,
+                protocol_consts::CMD_INIT,
+            ]),
+            Command::GetFirmwareVersion => push!(&[
+                protocol_consts::PREFIX_0,
+                protocol_consts::PREFIX_1_33,
+                protocol_consts::CMD_GET_FW_VERSION,
+            ]),
+            Command::GetData { port } => push!(&[
+                protocol_consts::PREFIX_0,
+                protocol_consts::PREFIX_1_33,
+                protocol_consts::CMD_GET_DATA,
+                port,
+            ]),
+            Command::SetSpeed { port, speed } => push!(&[
+                protocol_consts::PREFIX_0,
+                protocol_consts::PREFIX_1_32,
+                protocol_consts::CMD_SET_SPEED,
+                port,
+                protocol_consts::SPEED_FLAG,
+                speed,
+            ]),
+            Command::SetRgb { port, mode, colors } => {
+                if buf.capacity() < protocol_consts::RESPONSE_LEN {
+                    return Err(anyhow!("Buffer too small for SetRgb command"));
+                }
+                push!(&[
+                    protocol_consts::PREFIX_0,
+                    protocol_consts::PREFIX_1_32,
+                    protocol_consts::CMD_SET_RGB,
+                    port,
+                    mode,
+                ])?;
+                for &(r, g, b) in colors {
+                    push!(&[g, r, b])?;
+                }
+                Ok(())
+            }
+        }
+    }
     pub fn to_bytes(&self) -> Vec<u8> {
         use protocol_consts::*;
         match *self {
@@ -64,14 +118,10 @@ impl Command {
                 SPEED_FLAG,
                 speed,
             ],
-            Command::SetRgb {
-                port,
-                mode,
-                ref colors,
-            } => {
+            Command::SetRgb { port, mode, colors } => {
                 let mut buf = Vec::with_capacity(5 + 3 * colors.len());
                 buf.extend_from_slice(&[PREFIX_0, PREFIX_1_32, CMD_SET_RGB, port, mode]);
-                for &(g, r, b) in colors {
+                for &(r, g, b) in colors {
                     buf.extend_from_slice(&[g, r, b]);
                 }
                 buf

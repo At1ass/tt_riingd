@@ -13,6 +13,12 @@ lto = true
 codegen-units = 1
 strip = true
 
+[profile.profiling]
+inherits       = "release"
+debug          = true
+strip          = "none"
+lto            = false
+
 [[bin]]
 name = "tt_riingd"
 path = "src/bin/main.rs"
@@ -23,6 +29,7 @@ tokio = { version = "1.45.0", features = ["macros", "rt-multi-thread", "sync", "
 tokio-stream = "0.1.17"
 async-stream = "0.3.0"
 console-subscriber = "0.4.1"
+arc-swap = "1.7.1"
 
 # OS
 zbus = { version = "5.6.0", default-features = false, features = ["tokio"] }
@@ -30,6 +37,9 @@ hidapi = { version = "2.6" }
 daemonize = "0.5"
 signal-hook = { version = "0.3", features = ["iterator"] }
 event-listener = "5.4.0"
+arrayvec = "0.7.4"
+tokio-udev = "0.9"
+udev = "0.7"
 
 # Config
 # unconfig = { git = "https://github.com/rojer-98/unconfig.git", default-features = false }
@@ -60,9 +70,9 @@ notify = "8.0.0"
 
 [dev-dependencies]
 # Testing framework
-tokio-test = "0.4"              # async testing utilities
-mockall = "0.12"                # mocking framework for traits
-tempfile = "3.8"                # temporary files for config tests
-serial_test = "3.0"             # run tests serially when needed
-pretty_assertions = "1.4"       # better assertion output
-proptest = "1.4"                # property-based testing
+tokio-test = "0.4"
+mockall = "0.12"
+tempfile = "3.8"
+serial_test = "3.0"
+pretty_assertions = "1.4"
+proptest = "1.4"

@@ -1,14 +1,16 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use std::sync::Arc;
 use std::time::Duration;
+use std::{collections::HashMap, sync::Arc};
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use crate::{
-    app_context::AppState,
-    event::{Event, EventBus},
+    core::{
+        AppState,
+        event::{Event, MessageBroker},
+    },
     providers::traits::ServiceProvider,
     task_manager::TaskManager,
 };
@@ -41,11 +43,11 @@ use crate::{
 /// ```no_run
 /// use std::sync::Arc;
 /// use tt_riingd::providers::BroadcastServiceProvider;
-/// use tt_riingd::event::EventBus;
+/// use tt_riingd::event::MessageBroker;
 /// use tt_riingd::app_context::AppState;
 ///
 /// # async fn example(state: Arc<AppState>) -> anyhow::Result<()> {
-/// let event_bus = EventBus::new();
+/// let event_bus = MessageBroker::new();
 /// let provider = BroadcastServiceProvider::new(state, event_bus);
 /// // Use with TaskManager to start the service
 /// # Ok(())
@@ -53,12 +55,12 @@ use crate::{
 /// ```
 pub struct BroadcastServiceProvider {
     state: Arc<AppState>,
-    event_bus: EventBus,
+    event_bus: MessageBroker,
 }
 
 impl BroadcastServiceProvider {
     /// Creates a new broadcast service provider.
-    pub fn new(state: Arc<AppState>, event_bus: EventBus) -> Self {
+    pub fn new(state: Arc<AppState>, event_bus: MessageBroker) -> Self {
         Self { state, event_bus }
     }
 }
@@ -91,7 +93,7 @@ impl ServiceProvider for BroadcastServiceProvider {
 
 async fn run_broadcast_service(
     state: Arc<AppState>,
-    event_bus: EventBus,
+    event_bus: MessageBroker,
     cancel_token: CancellationToken,
 ) -> Result<()> {
     let mut interval = interval(Duration::from_secs(
@@ -112,10 +114,11 @@ async fn run_broadcast_service(
     Ok(())
 }
 
-async fn broadcast_current_state(state: &Arc<AppState>, event_bus: &EventBus) {
-    let sensor_data = state.sensor_data.read().await.clone();
+async fn broadcast_current_state(_state: &Arc<AppState>, event_bus: &MessageBroker) {
+    // let sensor_data = state.sensor_data.read().await.clone();
+    let sensor_data = HashMap::new();
 
-    if let Err(e) = event_bus.publish(Event::TemperatureChanged(sensor_data)) {
+    if let Err(e) = event_bus.notify(Event::TemperatureChanged(sensor_data)) {
         error!("Failed to broadcast temperature state: {e}");
     }
 }

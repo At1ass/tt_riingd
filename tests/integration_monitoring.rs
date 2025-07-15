@@ -16,7 +16,7 @@ use mocks::{
 
 use tt_riingd::{
     config::CurveCfg,
-    event::{Event, EventBus},
+    core::event::{Event, MessageBroker},
 };
 
 /// Test basic monitoring cycle with constant curve.
@@ -175,17 +175,17 @@ async fn test_multi_sensor_monitoring() -> Result<()> {
     Ok(())
 }
 
-/// Test EventBus integration for monitoring events.
+/// Test MessageBroker integration for monitoring events.
 ///
 /// Validates event publishing and subscription patterns.
 #[tokio::test]
 async fn test_event_system_integration() -> Result<()> {
-    // Arrange: Create EventBus for testing
-    let event_bus = EventBus::new();
+    // Arrange: Create MessageBroker for testing
+    let event_bus = MessageBroker::new();
     let mut receiver = event_bus.subscribe();
 
     // Act: Publish a system shutdown event
-    event_bus.publish(Event::SystemShutdown)?;
+    event_bus.notify(Event::SystemShutdown)?;
 
     // Assert: Verify event received
     let received_event = tokio::time::timeout(Duration::from_millis(100), receiver.recv())
@@ -282,10 +282,10 @@ async fn test_mock_fan_controller() -> Result<()> {
         .returning(|| Ok(()));
 
     mock_controller
-        .expect_update_channel()
-        .with(eq(1), eq(45.0), eq(50))
+        .expect_update_speed_batch()
+        .with(eq(vec![(1, 50)]))
         .times(1)
-        .returning(|_, _, _| Ok(()));
+        .returning(|_| Ok(()));
 
     mock_controller
         .expect_firmware_version()
@@ -294,7 +294,7 @@ async fn test_mock_fan_controller() -> Result<()> {
 
     // Act & Assert: Test mock behavior
     mock_controller.send_init().await?;
-    mock_controller.update_channel(1, 45.0, 50).await?;
+    mock_controller.update_speed_batch(vec![(1, 50)]).await?;
     let version = mock_controller.firmware_version().await?;
 
     assert_eq!(version, (1, 2, 3));

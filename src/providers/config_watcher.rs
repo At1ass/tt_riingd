@@ -217,7 +217,7 @@ async fn run_config_watcher_service(
                             match &change_type {
                                 ConfigChangeType::HotReload => {
                                     info!("Hot-reloadable changes detected");
-                                    if let Err(e) = event_bus.publish(AppEvent::ConfigChangeDetected(change_type)) {
+                                    if let Err(e) = event_bus.notify(AppEvent::ConfigChangeDetected(change_type)) {
                                         error!("Failed to publish config change event: {}", e);
                                     } else {
                                         info!("Published hot-reload configuration change event");
@@ -228,7 +228,7 @@ async fn run_config_watcher_service(
                                     warn!("These changes require daemon restart to take effect");
                                     info!("Configuration will not be reloaded to prevent hardware conflicts");
 
-                                    if let Err(e) = event_bus.publish(AppEvent::ConfigChangeDetected(change_type)) {
+                                    if let Err(e) = event_bus.notify(AppEvent::ConfigChangeDetected(change_type)) {
                                         error!("Failed to publish config change event: {}", e);
                                     } else {
                                         info!("Published cold-restart configuration change event");

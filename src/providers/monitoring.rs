@@ -1,15 +1,21 @@
 use anyhow::{Context, Result};
+use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::interval;
+use tokio::{sync::RwLock, time::interval};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::{
-    app_context::AppState,
-    event::{Event, EventBus},
+    ConfigManager,
+    config::{CurveCfg, CurveMapping, Mapping},
+    core::{
+        AppState,
+        event::{Event, MessageBroker, RequestPayload, Response, ServiceType},
+    },
+    drivers::commands::{BatchCommand, ExecutionMode},
     mappings::FanRef,
     providers::traits::ServiceProvider,
     task_manager::TaskManager,
@@ -38,25 +44,104 @@ use crate::{
 /// ```no_run
 /// use std::sync::Arc;
 /// use tt_riingd::providers::MonitoringServiceProvider;
-/// use tt_riingd::event::EventBus;
-/// use tt_riingd::app_context::AppState;
+/// use tt_riingd::core::event::MessageBroker;
+/// use tt_riingd::core::AppState;
+/// use tt_riingd::config::{Config, ConfigManager};
 ///
 /// # async fn example(state: Arc<AppState>) -> anyhow::Result<()> {
-/// let event_bus = EventBus::new();
-/// let provider = MonitoringServiceProvider::new(state, event_bus);
+/// let event_bus = MessageBroker::new();
+/// let config = Config::default();
+/// let config_manager = ConfigManager::load(None).await?;
+/// let provider = MonitoringServiceProvider::new(state, event_bus, &config_manager).await;
 /// // Use with TaskManager to start the service
 /// # Ok(())
 /// # }
 /// ```
+struct MappingCache {
+    /// Cache for mapping data.
+    pub mappings: Mapping,
+    pub curves: Vec<CurveCfg>,
+    pub active_curves: CurveMapping,
+}
+
+impl MappingCache {
+    /// Creates a new empty mapping cache.
+    pub fn new() -> Self {
+        Self {
+            mappings: Mapping::default(),
+            curves: Vec::new(),
+            active_curves: CurveMapping::default(),
+        }
+    }
+}
+
+struct MonitoringCache {
+    /// Cache for temperature data.
+    pub sensor_data: RwLock<HashMap<String, f32>>,
+    pub mapping_cache: Arc<ArcSwap<MappingCache>>,
+    pub new_mapping: Arc<ArcSwap<MappingCache>>,
+    // pub mapping: Mapping,
+    // pub curves: Vec<CurveCfg>,
+    // pub active_curves: CurveMapping,
+}
+
 pub struct MonitoringServiceProvider {
     state: Arc<AppState>,
-    event_bus: EventBus,
+    event_bus: MessageBroker,
+    cache: Arc<MonitoringCache>,
 }
 
 impl MonitoringServiceProvider {
     /// Creates a new monitoring service provider.
-    pub fn new(state: Arc<AppState>, event_bus: EventBus) -> Self {
-        Self { state, event_bus }
+    pub async fn new(
+        state: Arc<AppState>,
+        event_bus: MessageBroker,
+        config: &ConfigManager,
+    ) -> Self {
+        Self {
+            state,
+            event_bus,
+            cache: Arc::new(MonitoringCache {
+                sensor_data: RwLock::new(HashMap::new()),
+                mapping_cache: Arc::new(ArcSwap::from_pointee(MappingCache {
+                    mappings: Mapping::load_mappings(&config.get().await.mappings),
+                    curves: config.get().await.curves.clone(),
+                    active_curves: CurveMapping::load_mappings(
+                        &config.get().await.active_curve_mappings,
+                    ),
+                })),
+                new_mapping: Arc::new(ArcSwap::new(Arc::new(MappingCache::new()))),
+            }),
+        }
+    }
+}
+
+pub struct MonitoringBuffer {
+    /// Buffer for batch data to be processed.
+    pub batch_data: HashMap<String, Vec<(usize, u8)>>,
+    pub temp_data: HashMap<String, f32>,
+}
+
+impl Default for MonitoringBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MonitoringBuffer {
+    /// Creates a new monitoring buffer.
+    pub fn new() -> Self {
+        Self {
+            batch_data: HashMap::new(),
+            temp_data: HashMap::new(),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        // let mut batch_data = self.batch_data.write().await;
+        self.batch_data.clear();
+        // let mut temp_data = self.temp_data.write().await;
+        self.temp_data.clear();
     }
 }
 
@@ -65,10 +150,16 @@ impl ServiceProvider for MonitoringServiceProvider {
     async fn start(&self, task_manager: &mut TaskManager) -> Result<()> {
         let state = self.state.clone();
         let event_bus = self.event_bus.clone();
+        let cache = self.cache.clone();
+
+        // Create a shared buffer for batch data
+        let buffer = Arc::new(RwLock::new(MonitoringBuffer::new()));
 
         task_manager
             .spawn_task(self.name().to_string(), |cancel_token| async move {
-                run_monitoring_service(state, event_bus, cancel_token).await
+                let buffer_m = buffer.clone();
+                run_monitoring_service(state, event_bus, buffer_m, cancel_token, cache.clone())
+                    .await
             })
             .await
     }
@@ -88,12 +179,22 @@ impl ServiceProvider for MonitoringServiceProvider {
 
 async fn run_monitoring_service(
     state: Arc<AppState>,
-    event_bus: EventBus,
+    event_bus: MessageBroker,
+    batch_data: Arc<RwLock<MonitoringBuffer>>,
     cancel_token: CancellationToken,
+    cache: Arc<MonitoringCache>,
 ) -> Result<()> {
     let mut interval = interval(Duration::from_secs(u64::from(
         state.config().await.tick_seconds,
     )));
+
+    info!(
+        "Starting monitoring service with tick interval of {} seconds",
+        state.config().await.tick_seconds
+    );
+    let mut subcription = event_bus.subscribe();
+    let (rx, mut tx) = tokio::sync::mpsc::channel(100);
+    event_bus.register_handler(ServiceType::Monitoring, rx);
 
     loop {
         tokio::select! {
@@ -101,8 +202,33 @@ async fn run_monitoring_service(
                 info!("Monitoring service cancelled");
                 break;
             }
+            request = tx.recv() => {
+                match request {
+                    Some(req) => {
+                        info!("Received request: {:?}", req);
+                        let e = handle_event(&state, req.payload.clone(), cache.clone()).await;
+                        let _ = req.response_channel.send(e);
+                    },
+                    None => {
+                        info!("Command channel closed, exiting fan color service");
+                        break;
+                    }
+                }
+            }
+            event = subcription.recv() => {
+                match event {
+                    Ok(event) => {
+                        if let Err(e) = handle_notify(&state, event, batch_data.clone(), cache.clone()).await {
+                            error!("Failed to handle event: {e}");
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to receive event: {e}");
+                    }
+                }
+            }
             _instant = interval.tick() => {
-                if let Err(e) = collect_and_process_temperatures(&state, &event_bus).await {
+                if let Err(e) = collect_and_process_temperatures(&state, &event_bus, batch_data.clone(), cache.clone()).await {
                     error!("Failed to collect temperatures: {e}");
                 }
             }
@@ -111,18 +237,64 @@ async fn run_monitoring_service(
     Ok(())
 }
 
+async fn handle_event(
+    state: &Arc<AppState>,
+    request: Arc<RequestPayload>,
+    cache: Arc<MonitoringCache>,
+) -> Result<Response> {
+    match *request {
+        RequestPayload::PrepareConfigUpdate(_) => {
+            info!("Configuration change detected, reloading curves and mappings");
+            let config = state.config().await;
+            let new_mapping = MappingCache {
+                mappings: Mapping::load_mappings(&config.mappings),
+                curves: config.curves.clone(),
+                active_curves: CurveMapping::load_mappings(&config.active_curve_mappings),
+            };
+            cache.new_mapping.store(Arc::new(new_mapping));
+            Ok(Response::Success)
+        }
+        _ => {
+            debug!("Unhandled event: {:?}", request);
+            Err(anyhow::anyhow!("Unhandled event: {:?}", request))
+        }
+    }
+}
+
+async fn handle_notify(
+    _state: &Arc<AppState>,
+    event: Event,
+    _batch_data: Arc<RwLock<MonitoringBuffer>>,
+    cache: Arc<MonitoringCache>,
+) -> Result<()> {
+    match event {
+        Event::CommitConfigUpdate { .. } => {
+            info!("Committing new configuration");
+            cache.mapping_cache.store(cache.new_mapping.load_full());
+        }
+        Event::RollbackConfigUpdate { .. } => {
+            info!("Rolling back configuration to previous state");
+        }
+        _ => {
+            debug!("Unhandled event: {:?}", event);
+        }
+    }
+    Ok(())
+}
+
 async fn calculate_fan_speed(
-    controller_id: u8,
+    controller_id: &String,
     channel: u8,
     temp: f32,
-    state: &Arc<AppState>,
+    cache: &Arc<MonitoringCache>,
 ) -> Result<u8> {
-    let curve_registry: &Vec<_> = &state.config().await.curves;
-    let active_curves = state.active_curves.read().await;
+    let curve_registry: &Vec<_> = &cache.mapping_cache.load().curves;
+
+    let active_curves = &cache.mapping_cache.load().active_curves;
 
     let curve_name = active_curves
         .get_curve_for_fan(&FanRef {
-            controller_id: controller_id as usize,
+            controller_id: controller_id.clone(),
             channel: channel as usize,
         })
         .ok_or_else(|| {
@@ -143,35 +315,45 @@ async fn calculate_fan_speed(
 
 async fn collect_and_process_temperatures(
     state: &Arc<AppState>,
-    event_bus: &EventBus,
+    _event_bus: &MessageBroker,
+    batch_data: Arc<RwLock<MonitoringBuffer>>,
+    cache: Arc<MonitoringCache>,
 ) -> Result<()> {
-    let mut temperatures = HashMap::new();
+    let mut batch_data = batch_data.write().await;
+
+    batch_data.clear();
 
     let sensors = state.sensors.read().await;
-    let mut batch_data: HashMap<u8, Vec<_>> = HashMap::new();
     for sensor in sensors.iter() {
         match sensor.read_temperature().await {
             Ok(temp) => {
                 let sensor_name = sensor.key();
-                temperatures.insert(sensor_name.clone(), temp);
-                info!("Temperature of {sensor_name}: {temp:.2}°C");
+                batch_data.temp_data.insert(sensor_name.clone(), temp);
+                debug!("Temperature of {sensor_name}: {temp:.2}°C");
 
-                for fan in state.mapping.read().await.fans_for_sensor(&sensor_name) {
-                    let controller_id = u8::try_from(fan.controller_id).map_err(|_| {
-                        anyhow::anyhow!("Controller ID {} too large for u8", fan.controller_id)
-                    })?;
+                for fan in cache
+                    .mapping_cache
+                    .load()
+                    .mappings
+                    .fans_for_sensor(&sensor_name)
+                {
+                    let controller_id = &fan.controller_id;
                     let channel = u8::try_from(fan.channel)
                         .map_err(|_| anyhow::anyhow!("Channel {} too large for u8", fan.channel))?;
 
-                    let speed = calculate_fan_speed(controller_id, channel, temp, state)
+                    let speed = calculate_fan_speed(controller_id, channel, temp, &cache)
                         .await
                         .context("Failed to calculate fan speed")?;
 
-                    batch_data.entry(controller_id).or_default().push((
-                        channel as usize,
-                        temp,
-                        speed,
-                    ));
+                    if let Some(entry) = batch_data.batch_data.get_mut(controller_id) {
+                        entry.push((channel as usize, speed));
+                    } else {
+                        batch_data
+                            .batch_data
+                            .entry(controller_id.clone())
+                            .or_default()
+                            .push((channel as usize, speed));
+                    }
                 }
             }
             Err(e) => {
@@ -181,18 +363,17 @@ async fn collect_and_process_temperatures(
     }
 
     let controllers = state.controllers.read().await;
-    for (controller_id, data) in batch_data {
-        controllers
-            .update_channel_batch(controller_id, data)
-            .await
-            .context(format!("Failed to update controller {controller_id}"))?;
-    }
+    controllers
+        .batch_update(
+            BatchCommand::SetSpeeds {
+                data: &batch_data.batch_data,
+            },
+            ExecutionMode::Blocking,
+        )
+        .await
+        .context("Failed to update fan speeds in batch")?;
 
-    *state.sensor_data.write().await = temperatures.clone();
-
-    if let Err(e) = event_bus.publish(Event::TemperatureChanged(temperatures)) {
-        error!("Failed to publish temperature event: {e}");
-    }
+    *cache.sensor_data.write().await = batch_data.temp_data.clone();
 
     Ok(())
 }

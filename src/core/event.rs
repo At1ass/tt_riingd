@@ -1,105 +1,441 @@
-//! Event-driven communication system for inter-service messaging.
-
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use anyhow::Result;
-use tokio::sync::broadcast;
+use dashmap::DashMap;
+use tokio::sync::{broadcast, mpsc, oneshot};
+use tracing::info;
 
-/// Type of configuration change detected
+use crate::{impl_multiple_target_request, impl_single_target_request};
+
+// ============================================================================
+// SERVICE TYPES
+// ============================================================================
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ServiceType {
+    Monitoring,
+    FanColor,
+    Broadcast,
+    Coordinator,
+}
+
+// ============================================================================
+// SEALED TRAITS FOR COMPILE-TIME ROUTING
+// ============================================================================
+
+mod private {
+    pub trait Sealed {}
+}
+
+pub trait SingleTarget: private::Sealed {
+    const TARGET: ServiceType;
+}
+
+pub trait MultipleTarget: private::Sealed {
+    const TARGETS: &'static [ServiceType];
+}
+
+// ============================================================================
+// QUERY TYPES (SINGLE TARGET)
+// ============================================================================
+
+#[derive(Debug, Clone)]
+pub struct GetTemperatureQuery {
+    pub device_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct GetAllSensorDataQuery;
+
+#[derive(Debug, Clone)]
+pub struct GetColorQuery {
+    pub device_id: String,
+}
+
+impl_single_target_request!(GetTemperatureQuery, GetTemperature, ServiceType::Monitoring);
+
+impl_single_target_request!(
+    GetAllSensorDataQuery,
+    GetAllSensorData,
+    ServiceType::Monitoring
+);
+
+impl_single_target_request!(GetColorQuery, GetColor, ServiceType::FanColor);
+
+// ============================================================================
+// QUERY TYPES (MULTIPLE TARGET)
+// ============================================================================
+
+#[derive(Debug, Clone)]
+pub struct HealthCheckQuery;
+
+impl_multiple_target_request!(
+    HealthCheckQuery,
+    HealthCheck,
+    [
+        ServiceType::Monitoring,
+        ServiceType::FanColor,
+        ServiceType::Broadcast
+    ]
+);
+
+// ============================================================================
+// COMMAND TYPES (SINGLE TARGET)
+// ============================================================================
+
+#[derive(Debug, Clone)]
+pub struct SetColorCommand {
+    pub device_id: String,
+    pub color: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SetTemperatureCommand {
+    pub device_id: String,
+    pub temperature: f32,
+}
+
+impl_single_target_request!(SetColorCommand, SetColor, ServiceType::FanColor);
+
+impl_single_target_request!(
+    SetTemperatureCommand,
+    SetTemperature,
+    ServiceType::Monitoring
+);
+
+// ============================================================================
+// COMMAND TYPES (MULTIPLE TARGET)
+// ============================================================================
+
+#[derive(Debug, Clone)]
+pub struct PrepareConfigUpdateCommand {
+    pub transaction_id: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct PrepareShutdownCommand;
+
+#[derive(Debug, Clone)]
+pub struct CommitConfigUpdateCommand {
+    pub transaction_id: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct RollbackConfigUpdateCommand {
+    pub transaction_id: u64,
+}
+
+impl_multiple_target_request!(
+    PrepareConfigUpdateCommand,
+    PrepareConfigUpdate,
+    [
+        ServiceType::Monitoring,
+        ServiceType::FanColor,
+        ServiceType::Broadcast
+    ]
+);
+
+impl_multiple_target_request!(
+    PrepareShutdownCommand,
+    PrepareShutdown,
+    [
+        ServiceType::Monitoring,
+        ServiceType::FanColor,
+        ServiceType::Broadcast
+    ]
+);
+
+impl_multiple_target_request!(
+    CommitConfigUpdateCommand,
+    CommitConfigUpdate,
+    [
+        ServiceType::Monitoring,
+        ServiceType::FanColor,
+        ServiceType::Broadcast
+    ]
+);
+
+impl_multiple_target_request!(
+    RollbackConfigUpdateCommand,
+    RollbackConfigUpdate,
+    [
+        ServiceType::Monitoring,
+        ServiceType::FanColor,
+        ServiceType::Broadcast
+    ]
+);
+
+// ============================================================================
+// REQUEST PAYLOAD & RESPONSE TYPES
+// ============================================================================
+
+#[derive(Debug, Clone)]
+pub enum RequestPayload {
+    GetTemperature(GetTemperatureQuery),
+    GetAllSensorData(GetAllSensorDataQuery),
+    GetColor(GetColorQuery),
+    HealthCheck(HealthCheckQuery),
+    SetColor(SetColorCommand),
+    SetTemperature(SetTemperatureCommand),
+    PrepareConfigUpdate(PrepareConfigUpdateCommand),
+    PrepareShutdown(PrepareShutdownCommand),
+    CommitConfigUpdate(CommitConfigUpdateCommand),
+    RollbackConfigUpdate(RollbackConfigUpdateCommand),
+}
+
+#[derive(Debug, Clone)]
+pub enum Response {
+    Temperature {
+        device_id: String,
+        value: f32,
+    },
+    SensorData {
+        sensors: HashMap<String, f32>,
+    },
+    Color {
+        device_id: String,
+        color: String,
+    },
+    Health {
+        service: ServiceType,
+        status: String,
+    },
+    Success,
+    Error(String),
+}
+
+// ============================================================================
+// CONFIG CHANGE TYPES
+// ============================================================================
+
 #[derive(Debug, Clone)]
 pub enum ConfigChangeType {
-    /// Configuration changes that can be applied without restart
     HotReload,
-    /// Configuration changes that require full daemon restart
-    ColdRestart {
-        /// List of changed hardware-related sections
-        changed_sections: Vec<String>,
-    },
+    ColdRestart { changed_sections: Vec<String> },
 }
 
-/// Application events for inter-service communication.
-///
-/// Events are published through the EventBus and consumed by interested services.
-/// This enables loose coupling between components.
+// ============================================================================
+// EVENT TYPES FOR NOTIFICATIONS
+// ============================================================================
+
 #[derive(Debug, Clone)]
 pub enum Event {
-    /// Configuration change detection with type classification
-    ConfigChangeDetected(ConfigChangeType),
-    SystemShutdown,
     TemperatureChanged(HashMap<String, f32>),
-    ColorChanged,
+    ConfigReloaded,
+    ConfigChangeDetected(ConfigChangeType),
+    CommitConfigUpdate {
+        transaction_id: u64,
+    },
+    RollbackConfigUpdate {
+        transaction_id: u64,
+    },
+    DeviceConnected {
+        vendor_id: u16,
+        product_id: u16,
+        serial_number: Option<String>,
+    },
+    DeviceDisconnected {
+        vendor_id: u16,
+        product_id: u16,
+        serial_number: Option<String>,
+    },
+    SystemShutdown,
 }
 
-/// Event bus for publish-subscribe messaging between services.
-///
-/// Provides a centralized communication mechanism that allows services
-/// to communicate without direct dependencies.
-///
-/// # Example
-///
-/// ```no_run
-/// use tt_riingd::event::{Event, EventBus};
-/// use std::collections::HashMap;
-///
-/// // Create event bus and subscriber
-/// let event_bus = EventBus::new();
-/// let mut subscriber = event_bus.subscribe();
-///
-/// // Publish an event
-/// let temperatures = HashMap::new();
-/// event_bus.publish(Event::TemperatureChanged(temperatures));
-///
-/// // In async context, receive events:
-/// // let event = subscriber.recv().await;
-/// ```
-pub struct EventBus {
-    sender: broadcast::Sender<Event>,
+// ============================================================================
+// EXECUTABLE REQUEST TRAIT
+// ============================================================================
+
+pub trait ExecutableRequest {
+    type Output;
+    fn execute_on(
+        self,
+        broker: &MessageBroker,
+    ) -> impl std::future::Future<Output = Result<Self::Output>> + Send;
 }
 
-impl EventBus {
-    /// Creates a new EventBus with default capacity.
+// ============================================================================
+// REQUEST STRUCTURE
+// ============================================================================
+
+#[derive(Debug)]
+pub struct Request {
+    pub payload: Arc<RequestPayload>,
+    pub response_channel: oneshot::Sender<Result<Response>>,
+}
+
+// ============================================================================
+// MESSAGE BROKER IMPLEMENTATION
+// ============================================================================
+
+pub struct MessageBroker {
+    event_sender: broadcast::Sender<Event>,
+    service_handlers: Arc<DashMap<ServiceType, mpsc::Sender<Request>>>,
+}
+
+impl MessageBroker {
     pub fn new() -> Self {
-        let (sender, _) = broadcast::channel(100);
-        Self { sender }
+        info!("Initializing MessageBroker with default capacity");
+        let (event_sender, _) = broadcast::channel(1000);
+        Self {
+            event_sender,
+            service_handlers: Arc::new(DashMap::new()),
+        }
     }
 
-    /// Creates a new EventBus with custom capacity.
-    ///
-    /// # Arguments
-    ///
-    /// * `capacity` - Channel capacity for buffering events
-    #[cfg(test)]
     pub fn with_capacity(capacity: usize) -> Self {
-        let (sender, _) = broadcast::channel(capacity);
-        Self { sender }
+        info!("Initializing MessageBroker with capacity: {}", capacity);
+        let (event_sender, _) = broadcast::channel(capacity);
+        Self {
+            event_sender,
+            service_handlers: Arc::new(DashMap::new()),
+        }
     }
 
-    /// Publishes an event to all subscribers.
-    ///
-    /// Returns an error if there are no active subscribers.
-    pub fn publish(&self, event: Event) -> Result<()> {
-        self.sender.send(event)?;
+    pub fn register_handler(&self, service_type: ServiceType, handler: mpsc::Sender<Request>) {
+        let e = self.service_handlers.insert(service_type, handler);
+        if e.is_some() {
+            info!(
+                "Replaced existing handler for {:?} with new handler",
+                service_type
+            );
+        } else {
+            info!("Registered new handler for {:?}", service_type);
+        }
+
+        info!("Current handler count: {}", self.service_handlers.len());
+    }
+
+    pub fn notify(&self, event: Event) -> Result<()> {
+        self.event_sender.send(event)?;
         Ok(())
     }
 
-    /// Creates a new subscriber to receive events.
-    ///
-    /// Each subscriber receives all events published after subscription.
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
-        self.sender.subscribe()
+        self.event_sender.subscribe()
+    }
+
+    #[inline]
+    pub async fn execute<T>(&self, request: T) -> Result<T::Output>
+    where
+        T: ExecutableRequest,
+    {
+        request.execute_on(self).await
+    }
+
+    async fn execute_single<T>(&self, request: RequestPayload) -> Result<Response>
+    where
+        T: SingleTarget,
+    {
+        let service_type = T::TARGET;
+
+        let handler = self
+            .service_handlers
+            .get(&service_type)
+            .ok_or_else(|| anyhow::anyhow!("No handler registered for {:?}", service_type))?;
+
+        let (response_tx, response_rx) = oneshot::channel();
+
+        handler
+            .send(Request {
+                payload: Arc::new(request),
+                response_channel: response_tx,
+            })
+            .await?;
+
+        response_rx.await?
+    }
+
+    async fn execute_multiple<T>(
+        &self,
+        request: RequestPayload,
+    ) -> Result<HashMap<ServiceType, Response>>
+    where
+        T: MultipleTarget,
+    {
+        let target_services = T::TARGETS;
+
+        let payload_arc = Arc::new(request);
+
+        info!(
+            "Executing request on multiple targets: {:?}",
+            target_services
+        );
+
+        info!("Total registered services: {}", self.service_handlers.len());
+
+        let tasks: Vec<_> = target_services
+            .iter()
+            .filter_map(|&service_type| {
+                info!("Checking for handler for service type: {:?}", service_type);
+                let handler = self.service_handlers.get(&service_type);
+
+                if handler.is_none() {
+                    info!("No handler found for service type: {:?}", service_type);
+                    return None;
+                }
+
+                handler.map(|handler| {
+                    info!("Found handler for service type: {:?}", service_type);
+                    let handler = handler.value().clone();
+                    let (response_tx, response_rx) = oneshot::channel();
+                    let req = Request {
+                        payload: payload_arc.clone(), // Cheap Arc pointer clone (8 bytes)
+                        response_channel: response_tx,
+                    };
+
+                    (service_type, handler.clone(), req, response_rx)
+                })
+            })
+            .map(|(service_type, handler, req, response_rx)| {
+                info!("Spawning task for service type: {:?}", service_type);
+                tokio::spawn(async move {
+                    let _ = handler.send(req).await;
+                    (service_type, response_rx.await)
+                })
+            })
+            .collect();
+
+        let results = futures::future::join_all(tasks).await;
+        info!(
+            "Received responses for multiple targets: {:?}",
+            results.len()
+        );
+        let mut responses = HashMap::new();
+
+        for result in results.into_iter().flatten() {
+            let (service_type, response_result) = result;
+            if let Ok(Ok(response)) = response_result {
+                responses.insert(service_type, response);
+            }
+        }
+
+        Ok(responses)
+    }
+
+    pub fn handler_count(&self) -> usize {
+        self.service_handlers.len()
+    }
+
+    pub fn has_handler(&self, service_type: ServiceType) -> bool {
+        self.service_handlers.contains_key(&service_type)
     }
 }
 
-impl Clone for EventBus {
+impl Clone for MessageBroker {
     fn clone(&self) -> Self {
         Self {
-            sender: self.sender.clone(),
+            event_sender: self.event_sender.clone(),
+            service_handlers: Arc::clone(&self.service_handlers),
         }
     }
 }
 
-impl Default for EventBus {
+impl Default for MessageBroker {
     fn default() -> Self {
         Self::new()
     }
 }
+
+pub type EventBus = MessageBroker;

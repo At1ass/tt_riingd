@@ -4,8 +4,10 @@ use tracing::info;
 
 use crate::{
     config::Config,
-    temperature_sensors::sensor::TemperatureSensor,
-    temperature_sensors::{lm_sensor::LmSensorSource, nvidia::NvidiaSensor},
+    temperature_sensors::{
+        dummy_sensor::DummySensorSource, lm_sensor::LmSensorSource, nvidia::NvidiaSensor,
+        sensor::TemperatureSensor,
+    },
 };
 
 /// Simple sensor manager that abstracts initialization and provides iteration.
@@ -23,6 +25,9 @@ impl SensorManager {
 
         // Discover NVIDIA sensors
         sensors.extend(NvidiaSensor::discover(&config.sensors));
+
+        // Always add default dummy sensor for fallback
+        sensors.extend(DummySensorSource::discover());
 
         info!("Initialized {} temperature sensors", sensors.len());
         Ok(Self(Arc::new(sensors)))

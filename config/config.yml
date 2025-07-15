@@ -66,26 +66,32 @@ curves:
   - id: "CPUConstant"
     kind: constant
     speed: 60
+  - id: "PIZDEC"
+    kind: constant
+    speed: 100
+  - id: "LOW"
+    kind: constant
+    speed: 20
 ################################################################################
 #  Curve mappings
 ################################################################################
 active_curve_mappings:
   - curve: "CPUStepCurve"
     targets:
-      - { controller: 1, fan_idx: 2 }
-      - { controller: 1, fan_idx: 3 }
-      - { controller: 2, fan_idx: 1 }
-      - { controller: 2, fan_idx: 2 }
-      - { controller: 2, fan_idx: 3 }
-      - { controller: 3, fan_idx: 1 }
-      - { controller: 3, fan_idx: 2 }
+      - { controller_id: "quad-1", fan_idx: 2 }
+      - { controller_id: "quad-1", fan_idx: 3 }
+      - { controller_id: "quad-2", fan_idx: 1 }
+      - { controller_id: "quad-2", fan_idx: 2 }
+      - { controller_id: "quad-2", fan_idx: 3 }
+      - { controller_id: "quad-3", fan_idx: 1 }
+      - { controller_id: "quad-3", fan_idx: 2 }
   - curve: "GPUStepCurve"
     targets:
-      - { controller: 1, fan_idx: 1 }
-      - { controller: 3, fan_idx: 3 }
-      - { controller: 4, fan_idx: 1 }
-      - { controller: 4, fan_idx: 2 }
-      - { controller: 4, fan_idx: 3 }
+      - { controller_id: "quad-1", fan_idx: 1 }
+      - { controller_id: "quad-3", fan_idx: 3 }
+      - { controller_id: "quad-4", fan_idx: 1 }
+      - { controller_id: "quad-4", fan_idx: 2 }
+      - { controller_id: "quad-4", fan_idx: 3 }
 
 ################################################################################
 #  Sensors settings
@@ -106,7 +112,7 @@ sensors:
 effects:
   - id: "rainbow"
     kind: rainbow
-    duration: 20
+    duration: 5
   - id: "static_red"
     kind: constant-color
     rgb: [255, 0, 0]
@@ -116,42 +122,42 @@ effects:
   - id: "breate"
     kind: breathing
     color: [0, 255, 0]
-    duration: 10
+    duration: 5
 ################################################################################
 #  sensor <-> fan mapping
 ################################################################################
 mappings:
   - sensor: "cpu_temp"
     targets:
-      - { controller: 1, fan_idx: 2 }
-      - { controller: 1, fan_idx: 3 }
-      - { controller: 2, fan_idx: 1 }
-      - { controller: 2, fan_idx: 2 }
-      - { controller: 2, fan_idx: 3 }
-      - { controller: 3, fan_idx: 1 }
-      - { controller: 3, fan_idx: 2 }
+      - { controller_id: "quad-1", fan_idx: 2 }
+      - { controller_id: "quad-1", fan_idx: 3 }
+      - { controller_id: "quad-2", fan_idx: 1 }
+      - { controller_id: "quad-2", fan_idx: 2 }
+      - { controller_id: "quad-2", fan_idx: 3 }
+      - { controller_id: "quad-3", fan_idx: 1 }
+      - { controller_id: "quad-3", fan_idx: 2 }
   - sensor: "gpu_temp"
     targets:
-      - { controller: 1, fan_idx: 1 }
-      - { controller: 3, fan_idx: 3 }
-      - { controller: 4, fan_idx: 1 }
-      - { controller: 4, fan_idx: 2 }
-      - { controller: 4, fan_idx: 3 }
+      - { controller_id: "quad-1", fan_idx: 1 }
+      - { controller_id: "quad-3", fan_idx: 3 }
+      - { controller_id: "quad-4", fan_idx: 1 }
+      - { controller_id: "quad-4", fan_idx: 2 }
+      - { controller_id: "quad-4", fan_idx: 3 }
 ################################################################################
 #  color <-> fan mapping
 ################################################################################
 effect_mappings:
   - effect: "static_blue"
     targets:
-      - { controller: 1, fan_idx: 1 }
-      - { controller: 1, fan_idx: 2 }
-      - { controller: 1, fan_idx: 3 }
-      - { controller: 2, fan_idx: 1 }
-      - { controller: 2, fan_idx: 2 }
-      - { controller: 2, fan_idx: 3 }
-      - { controller: 3, fan_idx: 1 }
-      - { controller: 3, fan_idx: 2 }
-      - { controller: 3, fan_idx: 3 }
-      - { controller: 4, fan_idx: 1 }
-      - { controller: 4, fan_idx: 2 }
-      - { controller: 4, fan_idx: 3 }
+      - { controller_id: "quad-1", fan_idx: 1 }
+      - { controller_id: "quad-1", fan_idx: 2 }
+      - { controller_id: "quad-1", fan_idx: 3 }
+      - { controller_id: "quad-2", fan_idx: 1 }
+      - { controller_id: "quad-2", fan_idx: 2 }
+      - { controller_id: "quad-2", fan_idx: 3 }
+      - { controller_id: "quad-3", fan_idx: 1 }
+      - { controller_id: "quad-3", fan_idx: 2 }
+      - { controller_id: "quad-3", fan_idx: 3 }
+      - { controller_id: "quad-4", fan_idx: 1 }
+      - { controller_id: "quad-4", fan_idx: 2 }
+      - { controller_id: "quad-4", fan_idx: 3 }

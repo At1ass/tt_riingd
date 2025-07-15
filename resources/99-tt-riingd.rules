@@ -1,2 +1,5 @@
 # /etc/udev/rules.d/99-tt-riingd.rules
-SUBSYSTEM=="hidraw", SUBSYSTEMS=="usb", ATTRS{idVendor}=="264a", ATTRS{idProduct}=="232?", TAG+="uaccess", TAG+="Thermaltake_Riing" 
+SUBSYSTEM=="hidraw", SUBSYSTEMS=="usb", ATTRS{idVendor}=="264a", ATTRS{idProduct}=="232B", TAG+="uaccess", TAG+="Thermaltake_Riing"
+SUBSYSTEM=="hidraw", SUBSYSTEMS=="usb", ATTRS{idVendor}=="264a", ATTRS{idProduct}=="232C", TAG+="uaccess", TAG+="Thermaltake_Riing"
+SUBSYSTEM=="hidraw", SUBSYSTEMS=="usb", ATTRS{idVendor}=="264a", ATTRS{idProduct}=="232D", TAG+="uaccess", TAG+="Thermaltake_Riing"
+SUBSYSTEM=="hidraw", SUBSYSTEMS=="usb", ATTRS{idVendor}=="264a", ATTRS{idProduct}=="232E", TAG+="uaccess", TAG+="Thermaltake_Riing"

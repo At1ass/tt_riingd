@@ -17,6 +17,10 @@ use tt_riingd::{
     fan_curve::Point,
 };
 
+// Type aliases to reduce complexity
+pub type SpeedBatch = Vec<(usize, u8)>;
+pub type ColorBatch = Vec<(usize, Vec<(u8, u8, u8)>)>;
+
 /// Mock implementation of FanController for testing hardware interactions.
 ///
 /// This mock allows testing fan control logic without real USB devices.
@@ -26,9 +30,11 @@ use tt_riingd::{
 #[allow(dead_code)]
 pub trait MockableFanController: Send + Sync {
     async fn send_init(&self) -> Result<()>;
-    async fn update_channel(&self, channel: u8, temp: f32, speed: u8) -> Result<()>;
-    async fn update_channel_color(&self, channel: u8, red: u8, green: u8, blue: u8) -> Result<()>;
+    async fn update_speed_batch(&self, batch: SpeedBatch) -> Result<()>;
+    async fn update_color_batch(&self, batch: ColorBatch) -> Result<()>;
     async fn firmware_version(&self) -> Result<(u8, u8, u8)>;
+    fn led_count(&self) -> usize;
+    async fn get_id(&self) -> String;
 }
 
 /// Mock implementation of TemperatureSensor for testing monitoring logic.
@@ -65,18 +71,28 @@ impl<T: FanController> MockableFanController for FanControllerAdapter<T> {
         self.inner.send_init().await
     }
 
-    async fn update_channel(&self, channel: u8, temp: f32, speed: u8) -> Result<()> {
-        self.inner.update_channel(channel, temp, speed).await
+    async fn update_speed_batch(&self, batch: SpeedBatch) -> Result<()> {
+        self.inner.update_speed_batch(&batch).await
     }
 
-    async fn update_channel_color(&self, channel: u8, red: u8, green: u8, blue: u8) -> Result<()> {
-        self.inner
-            .update_channel_color(channel, red, green, blue)
-            .await
+    async fn update_color_batch(&self, batch: ColorBatch) -> Result<()> {
+        let converted: Vec<(usize, &[(u8, u8, u8)])> = batch
+            .iter()
+            .map(|(channel, colors)| (*channel, colors.as_slice()))
+            .collect();
+        self.inner.update_color_batch(&converted).await
     }
 
     async fn firmware_version(&self) -> Result<(u8, u8, u8)> {
         self.inner.firmware_version().await
+    }
+
+    fn led_count(&self) -> usize {
+        self.inner.led_count()
+    }
+
+    async fn get_id(&self) -> String {
+        self.inner.get_id().await
     }
 }
 
@@ -226,14 +242,14 @@ pub mod test_utils {
             mappings: vec![MappingCfg {
                 sensor: "test_sensor".to_string(),
                 targets: vec![FanTarget {
-                    controller: 1,
+                    controller_id: "1".to_string(),
                     fan_idx: 1,
                 }],
             }],
             active_curve_mappings: vec![CurveMappingCfg {
                 curve: "test_curve".to_string(),
                 targets: vec![FanTarget {
-                    controller: 1,
+                    controller_id: "1".to_string(),
                     fan_idx: 1,
                 }],
             }],
@@ -309,11 +325,11 @@ pub mod test_utils {
                     sensor: "cpu_temp".to_string(),
                     targets: vec![
                         FanTarget {
-                            controller: 1,
+                            controller_id: "1".to_string(),
                             fan_idx: 1,
                         },
                         FanTarget {
-                            controller: 1,
+                            controller_id: "1".to_string(),
                             fan_idx: 2,
                         },
                     ],
@@ -321,7 +337,7 @@ pub mod test_utils {
                 MappingCfg {
                     sensor: "gpu_temp".to_string(),
                     targets: vec![FanTarget {
-                        controller: 1,
+                        controller_id: "1".to_string(),
                         fan_idx: 3,
                     }],
                 },
@@ -330,21 +346,21 @@ pub mod test_utils {
                 CurveMappingCfg {
                     curve: "performance".to_string(),
                     targets: vec![FanTarget {
-                        controller: 1,
+                        controller_id: "1".to_string(),
                         fan_idx: 1,
                     }],
                 },
                 CurveMappingCfg {
                     curve: "smooth".to_string(),
                     targets: vec![FanTarget {
-                        controller: 1,
+                        controller_id: "1".to_string(),
                         fan_idx: 2,
                     }],
                 },
                 CurveMappingCfg {
                     curve: "silent".to_string(),
                     targets: vec![FanTarget {
-                        controller: 1,
+                        controller_id: "1".to_string(),
                         fan_idx: 3,
                     }],
                 },
@@ -368,11 +384,11 @@ pub mod test_utils {
                     effect: "cool_blue".to_string(),
                     targets: vec![
                         FanTarget {
-                            controller: 1,
+                            controller_id: "1".to_string(),
                             fan_idx: 1,
                         },
                         FanTarget {
-                            controller: 1,
+                            controller_id: "1".to_string(),
                             fan_idx: 2,
                         },
                     ],
@@ -380,7 +396,7 @@ pub mod test_utils {
                 EffectMappingCfg {
                     effect: "warm_orange".to_string(),
                     targets: vec![FanTarget {
-                        controller: 1,
+                        controller_id: "1".to_string(),
                         fan_idx: 3,
                     }],
                 },
