@@ -219,7 +219,7 @@ async fn blocking_udev_monitor(
 
                     if Registry::is_supported_hardware(vid, pid) {
                         info!(
-                            "UdevWatcher: Supported device detected: VID: {}, PID: {}, serial: {:?}",
+                            "UdevWatcher: Supported device detected: VID: {:04X}, PID: {:04X}, serial: {:?}",
                             vid, pid, serial
                         );
                         let event_info = UdevEventInfo {
@@ -246,7 +246,7 @@ async fn blocking_udev_monitor(
                         }
                     } else {
                         info!(
-                            "UdevWatcher: Unsupported device detected: VID: {}, PID: {}, serial: {:?}",
+                            "UdevWatcher: Unsupported device detected: VID: {:04X}, PID: {:04X}, serial: {:?}",
                             vid, pid, serial
                         );
                     }
@@ -264,6 +264,11 @@ async fn blocking_udev_monitor(
     Ok(())
 }
 
+fn parse_id(s: &str) -> Option<u16> {
+    let s = s.trim_start_matches("0x").trim_start_matches("0X");
+    u16::from_str_radix(s, 16).ok()
+}
+
 fn usb_ids(mut d: Device) -> Option<(u16, u16, Option<String>)> {
     loop {
         let vid = d
@@ -277,9 +282,18 @@ fn usb_ids(mut d: Device) -> Option<(u16, u16, Option<String>)> {
             .or_else(|| d.attribute_value("serial"));
 
         if let (Some(v), Some(p)) = (vid, pid) {
+            let v_parsed = parse_id(v.to_str()?);
+            let p_parsed = parse_id(p.to_str()?);
+            if v_parsed.is_none() || p_parsed.is_none() {
+                warn!(
+                    "Failed to parse VID or PID from device attributes: VID: {:?}, PID: {:?}",
+                    v, p
+                );
+                return None;
+            }
             return Some((
-                v.to_string_lossy().into_owned().parse().unwrap_or(0),
-                p.to_string_lossy().into_owned().parse().unwrap_or(0),
+                v_parsed.unwrap(),
+                p_parsed.unwrap(),
                 sn.map(|s| s.to_string_lossy().into_owned()),
             ));
         }
@@ -296,7 +310,7 @@ async fn handle_udev_event_info(event_info: UdevEventInfo, event_bus: &EventBus)
     match event_info.event_type {
         EventType::Add => {
             info!(
-                "HID device connected: {} (subsystem: {}, VID: {}, PID: {}, serial: {})",
+                "HID device connected: {} (subsystem: {}, VID: {:04X}, PID: {:04X}, serial: {})",
                 event_info.devnode,
                 event_info.subsystem,
                 event_info.vendor_id,
@@ -317,7 +331,7 @@ async fn handle_udev_event_info(event_info: UdevEventInfo, event_bus: &EventBus)
         }
         EventType::Remove => {
             info!(
-                "HID device disconnected: {} (subsystem: {}, VID: {}, PID: {}, serial: {})",
+                "HID device disconnected: {} (subsystem: {}, VID: {:04X}, PID: {:04X}, serial: {})",
                 event_info.devnode,
                 event_info.subsystem,
                 event_info.vendor_id,
