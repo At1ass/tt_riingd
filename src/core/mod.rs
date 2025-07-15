@@ -102,7 +102,9 @@ pub mod app_context;
 pub mod application;
 pub mod coordinator;
 pub mod event;
+mod macros;
 pub mod task_manager;
+// use macros::*;
 
 // Re-export commonly used items
 pub use app_context::AppState;

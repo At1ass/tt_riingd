@@ -13,11 +13,11 @@ lto = true
 codegen-units = 1
 strip = true
 
-[profile.profiling]              # любое имя, главное — уникальное
-inherits       = "release"       # копируем всё из release
-debug          = true            # DWARF-символы
-strip          = "none"          # ничего не выбрасываем
-lto            = false           # профилировщикам LTO не нужна, а сборка быстрее
+[profile.profiling]
+inherits       = "release"
+debug          = true
+strip          = "none"
+lto            = false
 
 [[bin]]
 name = "tt_riingd"
@@ -70,9 +70,9 @@ notify = "8.0.0"
 
 [dev-dependencies]
 # Testing framework
-tokio-test = "0.4"              # async testing utilities
-mockall = "0.12"                # mocking framework for traits
-tempfile = "3.8"                # temporary files for config tests
-serial_test = "3.0"             # run tests serially when needed
-pretty_assertions = "1.4"       # better assertion output
-proptest = "1.4"                # property-based testing
+tokio-test = "0.4"
+mockall = "0.12"
+tempfile = "3.8"
+serial_test = "3.0"
+pretty_assertions = "1.4"
+proptest = "1.4"
