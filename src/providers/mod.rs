@@ -30,7 +30,7 @@
 //!                              ▼
 //! ┌─────────────────────────────────────────────────────────────┐
 //! │                   Shared Dependencies                       │
-//! │     AppState, EventBus, ConfigManager                      │
+//! │     AppState, MessageBroker, ConfigManager                      │
 //! └─────────────────────────────────────────────────────────────┘
 //! ```
 //!
@@ -64,21 +64,23 @@
 //!
 //! ```no_run
 //! use tt_riingd::providers::{ServiceProvider, MonitoringServiceProvider};
-//! use tt_riingd::core::{AppState, EventBus};
-//! use tt_riingd::config::ConfigManager;
+//! use tt_riingd::core::{AppState, event::MessageBroker};
+//! use tt_riingd::config::{Config, ConfigManager};
 //! use std::sync::Arc;
 //!
 //! # async fn example() -> anyhow::Result<()> {
 //! // Create shared dependencies
+//! let config = Config::default();
 //! let config_manager = ConfigManager::load(None).await?;
-//! let app_state = Arc::new(AppState::new(config_manager).await?);
-//! let event_bus = EventBus::new();
+//! let app_state = Arc::new(AppState::new(config_manager.clone()).await?);
+//! let event_bus = MessageBroker::new();
 //!
 //! // Create provider with injected dependencies
 //! let monitoring_provider = MonitoringServiceProvider::new(
 //!     app_state.clone(),
-//!     event_bus.clone()
-//! );
+//!     event_bus.clone(),
+//!     &config_manager
+//! ).await;
 //!
 //! // Access provider metadata
 //! println!("Service: {} (priority: {})",
@@ -97,27 +99,27 @@
 //! 3. **Priority Ordering**: Services sorted by priority and criticality
 //! 4. **Instantiation**: Services created via provider factories
 //! 5. **Startup**: Services started in dependency order
-//! 6. **Runtime**: Services operate independently via EventBus
+//! 6. **Runtime**: Services operate independently via MessageBroker
 //! 7. **Shutdown**: Graceful shutdown in reverse priority order
 //!
 //! # Event-Driven Communication
 //!
-//! Services communicate through the [`EventBus`](crate::core::event::EventBus) using
+//! Services communicate through the [`MessageBroker`](crate::core::event::MessageBroker) using
 //! strongly-typed events:
 //!
 //! ```no_run
-//! use tt_riingd::core::event::{Event, EventBus};
+//! use tt_riingd::core::event::{Event, MessageBroker};
 //! use std::collections::HashMap;
 //!
 //! # async fn example() -> anyhow::Result<()> {
 //! // Event-driven communication between services
-//! let event_bus = EventBus::new();
+//! let event_bus = MessageBroker::new();
 //! let mut subscriber = event_bus.subscribe();
 //!
 //! // Publish temperature update event
 //! let mut temps = HashMap::new();
 //! temps.insert("cpu_temp".to_string(), 65.0);
-//! event_bus.publish(Event::TemperatureChanged(temps))?;
+//! event_bus.notify(Event::TemperatureChanged(temps))?;
 //!
 //! // Handle events in services
 //! if let Ok(event) = subscriber.recv().await {
@@ -176,15 +178,16 @@
 //! ```no_run
 //! use tt_riingd::core::coordinator::SystemCoordinator;
 //! use tt_riingd::providers::{MonitoringServiceProvider, BroadcastServiceProvider};
-//! use tt_riingd::core::{AppState, EventBus};
-//! use tt_riingd::config::ConfigManager;
+//! use tt_riingd::core::{AppState, event::MessageBroker};
+//! use tt_riingd::config::{Config, ConfigManager};
 //! use std::sync::Arc;
 //!
 //! # async fn example() -> anyhow::Result<()> {
 //! // Initialize shared dependencies  
+//! let config = Config::default();
 //! let config_manager = ConfigManager::load(None).await?;
-//! let app_state = Arc::new(AppState::new(config_manager).await?);
-//! let event_bus = EventBus::new();
+//! let app_state = Arc::new(AppState::new(config_manager.clone()).await?);
+//! let event_bus = MessageBroker::new();
 //!
 //! // Create coordinator and register services
 //! let mut coordinator = SystemCoordinator::new();
@@ -218,9 +221,8 @@ pub use udev_watcher::UdevWatcherServiceProvider;
 mod integration_tests {
     use super::*;
     use crate::{
-        app_context::AppState,
         config::{Config, ConfigManager},
-        event::EventBus,
+        core::{AppState, event::MessageBroker},
     };
     use std::sync::Arc;
 
@@ -234,12 +236,17 @@ mod integration_tests {
     #[tokio::test]
     async fn test_all_service_providers_creation() {
         let state = create_test_app_state().await;
-        let event_bus = EventBus::new();
+        let event_bus = MessageBroker::new();
 
         // Test that all providers can be created with shared dependencies
-        let monitoring = MonitoringServiceProvider::new(state.clone(), event_bus.clone());
+        let config_manager =
+            ConfigManager::new(Config::default(), std::path::PathBuf::from("/tmp/test.yml"));
+        let monitoring =
+            MonitoringServiceProvider::new(state.clone(), event_bus.clone(), &config_manager).await;
         let broadcast = BroadcastServiceProvider::new(state.clone(), event_bus.clone());
-        let fan_color = FanColorControlServiceProvider::new(state.clone(), event_bus.clone());
+        let fan_color =
+            FanColorControlServiceProvider::new(state.clone(), event_bus.clone(), &config_manager)
+                .await;
 
         // Verify provider metadata
         std::assert_eq!(monitoring.name(), "MonitoringService");
@@ -259,22 +266,22 @@ mod integration_tests {
     #[tokio::test]
     async fn test_service_provider_priority_ordering() {
         let state = create_test_app_state().await;
-        let event_bus = EventBus::new();
+        let event_bus = MessageBroker::new();
 
         // Create providers and collect their metadata
+        let config_manager =
+            ConfigManager::new(Config::default(), std::path::PathBuf::from("/tmp/test.yml"));
+        let broadcast = BroadcastServiceProvider::new(state.clone(), event_bus.clone());
+        let monitoring =
+            MonitoringServiceProvider::new(state.clone(), event_bus.clone(), &config_manager).await;
+        let fan_color =
+            FanColorControlServiceProvider::new(state.clone(), event_bus.clone(), &config_manager)
+                .await;
+
         let providers = vec![
-            (
-                BroadcastServiceProvider::new(state.clone(), event_bus.clone()).name(),
-                BroadcastServiceProvider::new(state.clone(), event_bus.clone()).priority(),
-            ),
-            (
-                MonitoringServiceProvider::new(state.clone(), event_bus.clone()).name(),
-                MonitoringServiceProvider::new(state.clone(), event_bus.clone()).priority(),
-            ),
-            (
-                FanColorControlServiceProvider::new(state.clone(), event_bus.clone()).name(),
-                FanColorControlServiceProvider::new(state.clone(), event_bus.clone()).priority(),
-            ),
+            (broadcast.name(), broadcast.priority()),
+            (monitoring.name(), monitoring.priority()),
+            (fan_color.name(), fan_color.priority()),
         ];
 
         // Sort by priority (high to low)
@@ -295,19 +302,25 @@ mod integration_tests {
     #[tokio::test]
     async fn test_shared_state_dependency_injection() {
         let state = create_test_app_state().await;
-        let event_bus = EventBus::new();
+        let event_bus = MessageBroker::new();
 
         // Create multiple providers with the same shared state
-        let _monitoring = MonitoringServiceProvider::new(state.clone(), event_bus.clone());
+        let config_manager =
+            ConfigManager::new(Config::default(), std::path::PathBuf::from("/tmp/test.yml"));
+        let _monitoring =
+            MonitoringServiceProvider::new(state.clone(), event_bus.clone(), &config_manager).await;
         let _broadcast = BroadcastServiceProvider::new(state.clone(), event_bus.clone());
-        let _fan_color = FanColorControlServiceProvider::new(state.clone(), event_bus.clone());
+        let _fan_color =
+            FanColorControlServiceProvider::new(state.clone(), event_bus.clone(), &config_manager)
+                .await;
 
         // All providers should share the same underlying state
         // This is tested by ensuring they can all be created successfully
         // and that the Arc reference counting works correctly
 
-        // Verify that all providers are using the same EventBus capacity
-        let monitoring_bus = MonitoringServiceProvider::new(state.clone(), event_bus.clone());
+        // Verify that all providers are using the same MessageBroker capacity
+        let monitoring_bus =
+            MonitoringServiceProvider::new(state.clone(), event_bus.clone(), &config_manager).await;
         let broadcast_bus = BroadcastServiceProvider::new(state.clone(), event_bus.clone());
 
         // All should have the same base properties
@@ -318,22 +331,22 @@ mod integration_tests {
     #[tokio::test]
     async fn test_service_provider_trait_compliance() {
         let state = create_test_app_state().await;
-        let event_bus = EventBus::new();
+        let event_bus = MessageBroker::new();
 
         // Test that all providers implement ServiceProvider trait correctly
+        let config_manager =
+            ConfigManager::new(Config::default(), std::path::PathBuf::from("/tmp/test.yml"));
+        let monitoring =
+            MonitoringServiceProvider::new(state.clone(), event_bus.clone(), &config_manager).await;
+        let broadcast = BroadcastServiceProvider::new(state.clone(), event_bus.clone());
+        let fan_color =
+            FanColorControlServiceProvider::new(state.clone(), event_bus.clone(), &config_manager)
+                .await;
+
         let providers: Vec<Box<dyn ServiceProvider>> = vec![
-            Box::new(MonitoringServiceProvider::new(
-                state.clone(),
-                event_bus.clone(),
-            )),
-            Box::new(BroadcastServiceProvider::new(
-                state.clone(),
-                event_bus.clone(),
-            )),
-            Box::new(FanColorControlServiceProvider::new(
-                state.clone(),
-                event_bus.clone(),
-            )),
+            Box::new(monitoring),
+            Box::new(broadcast),
+            Box::new(fan_color),
         ];
 
         // Verify trait methods work correctly
@@ -353,12 +366,17 @@ mod integration_tests {
     #[tokio::test]
     async fn test_critical_vs_noncritical_classification() {
         let state = create_test_app_state().await;
-        let event_bus = EventBus::new();
+        let event_bus = MessageBroker::new();
 
         // Test criticality classification
-        let monitoring = MonitoringServiceProvider::new(state.clone(), event_bus.clone());
+        let config_manager =
+            ConfigManager::new(Config::default(), std::path::PathBuf::from("/tmp/test.yml"));
+        let monitoring =
+            MonitoringServiceProvider::new(state.clone(), event_bus.clone(), &config_manager).await;
         let broadcast = BroadcastServiceProvider::new(state.clone(), event_bus.clone());
-        let fan_color = FanColorControlServiceProvider::new(state.clone(), event_bus.clone());
+        let fan_color =
+            FanColorControlServiceProvider::new(state.clone(), event_bus.clone(), &config_manager)
+                .await;
 
         // Monitoring should be critical (core functionality)
         assert!(monitoring.is_critical());
@@ -378,22 +396,27 @@ mod integration_tests {
     #[tokio::test]
     async fn test_event_bus_sharing() {
         let state = create_test_app_state().await;
-        let event_bus = EventBus::new();
+        let event_bus = MessageBroker::new();
 
         // Test that multiple providers can share the same event bus
-        let _monitoring = MonitoringServiceProvider::new(state.clone(), event_bus.clone());
+        let config_manager =
+            ConfigManager::new(Config::default(), std::path::PathBuf::from("/tmp/test.yml"));
+        let _monitoring =
+            MonitoringServiceProvider::new(state.clone(), event_bus.clone(), &config_manager).await;
         let _broadcast = BroadcastServiceProvider::new(state.clone(), event_bus.clone());
-        let _fan_color = FanColorControlServiceProvider::new(state.clone(), event_bus.clone());
+        let _fan_color =
+            FanColorControlServiceProvider::new(state.clone(), event_bus.clone(), &config_manager)
+                .await;
 
         // All providers should be able to use the same event bus
-        // This tests that EventBus::clone() works correctly and
+        // This tests that MessageBroker::clone() works correctly and
         // that multiple providers can share event communication
 
         // Test event bus functionality
         let _receiver = event_bus.subscribe();
         assert!(
             event_bus
-                .publish(crate::event::Event::SystemShutdown)
+                .notify(crate::core::event::Event::SystemShutdown)
                 .is_ok()
         );
 
@@ -404,7 +427,7 @@ mod integration_tests {
     #[tokio::test]
     async fn test_app_state_concurrent_access() {
         let state = create_test_app_state().await;
-        let event_bus = EventBus::new();
+        let event_bus = MessageBroker::new();
 
         // Test that AppState can be safely accessed concurrently
         let state1 = state.clone();
@@ -416,8 +439,13 @@ mod integration_tests {
         let event_bus3 = event_bus.clone();
 
         // Create providers in different "threads" (tasks)
+        let config_manager =
+            ConfigManager::new(Config::default(), std::path::PathBuf::from("/tmp/test.yml"));
+        let config1 = config_manager.clone();
+        let config2 = config_manager.clone();
+
         let task1 = tokio::spawn(async move {
-            let _provider = MonitoringServiceProvider::new(state1, event_bus1);
+            let _provider = MonitoringServiceProvider::new(state1, event_bus1, &config1).await;
         });
 
         let task2 = tokio::spawn(async move {
@@ -425,7 +453,7 @@ mod integration_tests {
         });
 
         let task3 = tokio::spawn(async move {
-            let _provider = FanColorControlServiceProvider::new(state3, event_bus3);
+            let _provider = FanColorControlServiceProvider::new(state3, event_bus3, &config2).await;
         });
 
         // All tasks should complete successfully
@@ -437,11 +465,15 @@ mod integration_tests {
     #[tokio::test]
     async fn test_provider_metadata_consistency() {
         let state = create_test_app_state().await;
-        let event_bus = EventBus::new();
+        let event_bus = MessageBroker::new();
 
         // Test that provider metadata is consistent across multiple creations
-        let monitoring1 = MonitoringServiceProvider::new(state.clone(), event_bus.clone());
-        let monitoring2 = MonitoringServiceProvider::new(state.clone(), event_bus.clone());
+        let config_manager =
+            ConfigManager::new(Config::default(), std::path::PathBuf::from("/tmp/test.yml"));
+        let monitoring1 =
+            MonitoringServiceProvider::new(state.clone(), event_bus.clone(), &config_manager).await;
+        let monitoring2 =
+            MonitoringServiceProvider::new(state.clone(), event_bus.clone(), &config_manager).await;
 
         std::assert_eq!(monitoring1.name(), monitoring2.name());
         std::assert_eq!(monitoring1.priority(), monitoring2.priority());

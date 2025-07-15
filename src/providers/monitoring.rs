@@ -10,11 +10,12 @@ use tracing::{debug, error, info};
 
 use crate::{
     ConfigManager,
-    app_context::AppState,
     config::{CurveCfg, CurveMapping, Mapping},
-    core::Event,
+    core::{
+        AppState,
+        event::{Event, MessageBroker, RequestPayload, Response, ServiceType},
+    },
     drivers::commands::{BatchCommand, ExecutionMode},
-    event::{EventBus, RequestPayload, Response, ServiceType},
     mappings::FanRef,
     providers::traits::ServiceProvider,
     task_manager::TaskManager,
@@ -43,12 +44,15 @@ use crate::{
 /// ```no_run
 /// use std::sync::Arc;
 /// use tt_riingd::providers::MonitoringServiceProvider;
-/// use tt_riingd::event::EventBus;
-/// use tt_riingd::app_context::AppState;
+/// use tt_riingd::core::event::MessageBroker;
+/// use tt_riingd::core::AppState;
+/// use tt_riingd::config::{Config, ConfigManager};
 ///
 /// # async fn example(state: Arc<AppState>) -> anyhow::Result<()> {
-/// let event_bus = EventBus::new();
-/// let provider = MonitoringServiceProvider::new(state, event_bus);
+/// let event_bus = MessageBroker::new();
+/// let config = Config::default();
+/// let config_manager = ConfigManager::load(None).await?;
+/// let provider = MonitoringServiceProvider::new(state, event_bus, &config_manager).await;
 /// // Use with TaskManager to start the service
 /// # Ok(())
 /// # }
@@ -83,13 +87,17 @@ struct MonitoringCache {
 
 pub struct MonitoringServiceProvider {
     state: Arc<AppState>,
-    event_bus: EventBus,
+    event_bus: MessageBroker,
     cache: Arc<MonitoringCache>,
 }
 
 impl MonitoringServiceProvider {
     /// Creates a new monitoring service provider.
-    pub async fn new(state: Arc<AppState>, event_bus: EventBus, config: &ConfigManager) -> Self {
+    pub async fn new(
+        state: Arc<AppState>,
+        event_bus: MessageBroker,
+        config: &ConfigManager,
+    ) -> Self {
         Self {
             state,
             event_bus,
@@ -171,7 +179,7 @@ impl ServiceProvider for MonitoringServiceProvider {
 
 async fn run_monitoring_service(
     state: Arc<AppState>,
-    event_bus: EventBus,
+    event_bus: MessageBroker,
     batch_data: Arc<RwLock<MonitoringBuffer>>,
     cancel_token: CancellationToken,
     cache: Arc<MonitoringCache>,
@@ -307,7 +315,7 @@ async fn calculate_fan_speed(
 
 async fn collect_and_process_temperatures(
     state: &Arc<AppState>,
-    _event_bus: &EventBus,
+    _event_bus: &MessageBroker,
     batch_data: Arc<RwLock<MonitoringBuffer>>,
     cache: Arc<MonitoringCache>,
 ) -> Result<()> {

@@ -259,7 +259,7 @@ async fn test_controller_event_integration() -> Result<()> {
     // Act: Publish controller-related events
     for event in events {
         event_bus
-            .publish(event)
+            .notify(event)
             .context("Event publishing should succeed")?;
     }
 

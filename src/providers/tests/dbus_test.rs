@@ -1,9 +1,7 @@
 use super::super::dbus::DBusServiceProvider;
 use crate::{
-    app_context::AppState,
+    core::{AppState, TaskManager, event::{Event, MessageBroker}},
     config::Config,
-    core::task_manager::TaskManager,
-    event::{Event, EventBus},
     providers::traits::ServiceProvider,
 };
 use std::{sync::Arc, time::Duration};
@@ -20,7 +18,7 @@ async fn create_mock_app_state() -> Arc<AppState> {
 #[tokio::test]
 async fn dbus_service_provider_creation() {
     let state = create_mock_app_state().await;
-    let event_bus = EventBus::new();
+    let event_bus = MessageBroker::new();
 
     // Note: DBus service creation might fail in test environment without D-Bus
     match DBusServiceProvider::new(state.clone(), event_bus.clone()).await {
@@ -39,7 +37,7 @@ async fn dbus_service_provider_creation() {
 #[tokio::test]
 async fn dbus_service_provider_traits() {
     let _state = create_mock_app_state();
-    let _event_bus = EventBus::new();
+    let _event_bus = MessageBroker::new();
 
     // Test the trait implementation without actually creating D-Bus connection
     // We'll test the properties that should be consistent
@@ -57,7 +55,7 @@ async fn dbus_service_provider_traits() {
 #[tokio::test]
 async fn dbus_service_start_without_session() {
     let state = create_mock_app_state().await;
-    let event_bus = EventBus::new();
+    let event_bus = MessageBroker::new();
     let mut task_manager = TaskManager::new();
 
     // Attempt to create D-Bus service - might fail without session bus
@@ -89,7 +87,7 @@ async fn dbus_service_start_without_session() {
 #[tokio::test]
 async fn dbus_service_responds_to_cancellation() {
     let state = create_mock_app_state().await;
-    let event_bus = EventBus::new();
+    let event_bus = MessageBroker::new();
     let mut task_manager = TaskManager::new();
 
     // Only test if D-Bus is available
@@ -121,7 +119,7 @@ async fn dbus_service_responds_to_cancellation() {
 #[tokio::test]
 async fn dbus_service_runs_without_errors() {
     let state = create_mock_app_state().await;
-    let event_bus = EventBus::new();
+    let event_bus = MessageBroker::new();
     let mut task_manager = TaskManager::new();
 
     // Only test if D-Bus is available
@@ -164,7 +162,7 @@ async fn dbus_service_properties() {
 #[tokio::test]
 async fn dbus_service_error_handling() {
     let state = create_mock_app_state().await;
-    let event_bus = EventBus::new();
+    let event_bus = MessageBroker::new();
 
     // Test error handling when D-Bus session is not available
     // This should fail gracefully in most test environments
@@ -185,7 +183,7 @@ async fn dbus_service_error_handling() {
 #[tokio::test]
 async fn dbus_service_concurrent_creation() {
     let state = create_mock_app_state().await;
-    let event_bus = EventBus::new();
+    let event_bus = MessageBroker::new();
 
     // Test concurrent creation attempts
     let creation_tasks = (0..3)
@@ -217,7 +215,7 @@ async fn dbus_service_concurrent_creation() {
 #[tokio::test]
 async fn dbus_service_integration_readiness() {
     let state = create_mock_app_state().await;
-    let event_bus = EventBus::new();
+    let event_bus = MessageBroker::new();
 
     // Test that the service is ready for integration tests
     match DBusServiceProvider::new(state, event_bus).await {

@@ -3,7 +3,7 @@
 //! Verifies that cloned MessageBroker instances share the same service handlers
 //! and that handlers registered on one instance are visible on all clones.
 
-use crate::event::{MessageBroker, ServiceType, RequestPayload, Response};
+use crate::core::event::{MessageBroker, ServiceType, Request};
 use tokio::sync::mpsc;
 
 #[tokio::test]
@@ -12,7 +12,7 @@ async fn test_message_broker_clone_shares_handlers() {
     let broker2 = broker1.clone();
     
     // Register handler on first broker
-    let (tx, _rx) = mpsc::channel(10);
+    let (tx, _rx) = mpsc::channel::<Request>(10);
     broker1.register_handler(ServiceType::FanColor, tx);
     
     // Verify both brokers see the handler
@@ -29,8 +29,8 @@ async fn test_message_broker_shared_registration() {
     let broker3 = broker2.clone();
     
     // Register handlers on different broker instances
-    let (tx1, _rx1) = mpsc::channel(10);
-    let (tx2, _rx2) = mpsc::channel(10);
+    let (tx1, _rx1) = mpsc::channel::<Request>(10);
+    let (tx2, _rx2) = mpsc::channel::<Request>(10);
     
     broker1.register_handler(ServiceType::FanColor, tx1);
     broker2.register_handler(ServiceType::Monitoring, tx2);
@@ -54,13 +54,13 @@ async fn test_message_broker_handler_replacement() {
     let broker2 = broker1.clone();
     
     // Register initial handler
-    let (tx1, _rx1) = mpsc::channel(10);
+    let (tx1, _rx1) = mpsc::channel::<Request>(10);
     broker1.register_handler(ServiceType::FanColor, tx1);
     assert_eq!(broker1.handler_count(), 1);
     assert_eq!(broker2.handler_count(), 1);
     
     // Replace with new handler on different broker instance
-    let (tx2, _rx2) = mpsc::channel(10);
+    let (tx2, _rx2) = mpsc::channel::<Request>(10);
     broker2.register_handler(ServiceType::FanColor, tx2);
     
     // Should still have only 1 handler (replaced, not added)
@@ -88,7 +88,7 @@ async fn test_concurrent_handler_registration() {
         };
         
         let handle = tokio::spawn(async move {
-            let (tx, _rx) = mpsc::channel(10);
+            let (tx, _rx) = mpsc::channel::<Request>(10);
             broker_clone.register_handler(service_type, tx);
         });
         

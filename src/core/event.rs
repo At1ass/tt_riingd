@@ -461,10 +461,7 @@ impl MessageBroker {
             info!("Registered new handler for {:?}", service_type);
         }
 
-        info!(
-            "Current handler count: {}",
-            self.service_handlers.len()
-        );
+        info!("Current handler count: {}", self.service_handlers.len());
     }
 
     pub fn notify(&self, event: Event) -> Result<()> {

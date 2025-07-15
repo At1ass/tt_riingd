@@ -8,7 +8,7 @@ use tracing::info;
 use zbus::Connection;
 
 use crate::{
-    core::{app_context::AppState, event::EventBus, task_manager::TaskManager},
+    core::{app_context::AppState, event::MessageBroker, task_manager::TaskManager},
     interface::dbus_interface::DBusInterface,
     providers::traits::ServiceProvider,
 };
@@ -49,11 +49,11 @@ use crate::{
 /// ```no_run
 /// use std::sync::Arc;
 /// use tt_riingd::providers::DBusServiceProvider;
-/// use tt_riingd::event::EventBus;
+/// use tt_riingd::event::MessageBroker;
 /// use tt_riingd::app_context::AppState;
 ///
 /// # async fn example(state: Arc<AppState>) -> anyhow::Result<()> {
-/// let event_bus = EventBus::new();
+/// let event_bus = MessageBroker::new();
 /// // Note: This may fail if D-Bus session is not available
 /// let provider = DBusServiceProvider::new(state, event_bus).await?;
 /// // Use with TaskManager to start the service
@@ -62,13 +62,13 @@ use crate::{
 /// ```
 pub struct DBusServiceProvider {
     state: Arc<AppState>,
-    event_bus: EventBus,
+    event_bus: MessageBroker,
     connection: Connection,
 }
 
 impl DBusServiceProvider {
     /// Creates a new D-Bus service provider with session bus connection.
-    pub async fn new(state: Arc<AppState>, event_bus: EventBus) -> Result<Self> {
+    pub async fn new(state: Arc<AppState>, event_bus: MessageBroker) -> Result<Self> {
         let connection = Connection::session().await?;
         Ok(Self {
             state,
@@ -111,7 +111,7 @@ impl ServiceProvider for DBusServiceProvider {
 /// until cancellation is requested.
 async fn run_dbus_service(
     state: Arc<AppState>,
-    event_bus: EventBus,
+    event_bus: MessageBroker,
     connection: Connection,
     cancel_token: CancellationToken,
 ) -> Result<()> {

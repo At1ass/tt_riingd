@@ -3,9 +3,11 @@
 use super::super::monitoring::*;
 use crate::{
     config::{Config, FanTarget, MappingCfg, SensorCfg},
-    core::{AppState, EventBus, TaskManager, event::Event},
+    core::{
+        AppState, TaskManager,
+        event::{Event, MessageBroker},
+    },
     drivers::controller_manager::ControllerManager,
-    mappings::{CurveMapping, EffectMapping, Mapping},
     providers::traits::ServiceProvider,
     temperature_sensors::{sensor::TemperatureSensor, sensor_manager},
 };
@@ -14,10 +16,7 @@ use async_trait::async_trait;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::{
-    sync::RwLock,
-    time::{sleep, timeout},
-};
+use tokio::time::{sleep, timeout};
 
 // Mock sensor implementation for testing
 #[derive(Debug)]
@@ -102,10 +101,11 @@ async fn create_mock_app_state() -> Arc<AppState> {
 #[tokio::test]
 async fn monitoring_service_updates_controllers() {
     let state = create_mock_app_state().await;
-    let event_bus = EventBus::new();
+    let event_bus = MessageBroker::new();
     let mut task_manager = TaskManager::new();
 
-    let provider = MonitoringServiceProvider::new(state.clone(), event_bus);
+    let config_manager = create_test_config_manager(Config::default());
+    let provider = MonitoringServiceProvider::new(state.clone(), event_bus, &config_manager).await;
     provider.start(&mut task_manager).await.unwrap();
 
     // Wait for service to process sensors
@@ -123,10 +123,11 @@ async fn monitoring_service_updates_controllers() {
 #[tokio::test]
 async fn monitoring_service_responds_to_cancellation() {
     let state = create_mock_app_state().await;
-    let event_bus = EventBus::new();
+    let event_bus = MessageBroker::new();
     let mut task_manager = TaskManager::new();
 
-    let provider = MonitoringServiceProvider::new(state, event_bus);
+    let config_manager = create_test_config_manager(Config::default());
+    let provider = MonitoringServiceProvider::new(state, event_bus, &config_manager).await;
     provider.start(&mut task_manager).await.unwrap();
 
     // Verify service is running
@@ -190,20 +191,14 @@ async fn monitoring_service_multiple_sensors() {
         config_manager: Arc::new(config_manager),
         controllers: Arc::new(tokio::sync::RwLock::new(controllers)),
         sensors: Arc::new(tokio::sync::RwLock::new(sensor_manager)),
-        mapping: Arc::new(RwLock::new(Mapping::load_mappings(&[]))),
-        effect_runners: Arc::new(RwLock::new(
-            crate::mappings::EffectStore::build_effect_store(&[], &[]),
-        )),
-        effect_mappings: Arc::new(RwLock::new(EffectMapping::build_color_mapping(&[]))),
-        active_curves: Arc::new(RwLock::new(CurveMapping::load_mappings(&[]))),
-        sensor_data: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
     });
 
-    let event_bus = EventBus::new();
+    let event_bus = MessageBroker::new();
     let mut receiver = event_bus.subscribe();
     let mut task_manager = TaskManager::new();
 
-    let provider = MonitoringServiceProvider::new(state, event_bus);
+    let config_manager = create_test_config_manager(config.clone());
+    let provider = MonitoringServiceProvider::new(state, event_bus, &config_manager).await;
     provider.start(&mut task_manager).await.unwrap();
 
     // Wait for temperature monitoring cycle
@@ -251,15 +246,16 @@ async fn monitoring_service_timing_configuration() {
     };
 
     let state = {
-        let config_manager = create_test_config_manager(config);
+        let config_manager = create_test_config_manager(config.clone());
         Arc::new(AppState::new(config_manager).await.unwrap())
     };
 
-    let event_bus = EventBus::new();
+    let event_bus = MessageBroker::new();
     let mut receiver = event_bus.subscribe();
     let mut task_manager = TaskManager::new();
 
-    let provider = MonitoringServiceProvider::new(state, event_bus);
+    let config_manager = create_test_config_manager(config.clone());
+    let provider = MonitoringServiceProvider::new(state, event_bus, &config_manager).await;
     provider.start(&mut task_manager).await.unwrap();
 
     // With 1-second tick, we should get events more frequently

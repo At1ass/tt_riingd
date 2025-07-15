@@ -11,13 +11,9 @@ use tracing::{debug, error, info, warn};
 
 use crate::ConfigManager;
 use crate::config::EffectStore;
-use crate::core::Event;
+use crate::core::event::{Event, MessageBroker, RequestPayload, Response, ServiceType};
 use crate::drivers::commands::{BatchCommand, ExecutionMode};
-use crate::event::{RequestPayload, Response, ServiceType};
-use crate::{
-    app_context::AppState, event::EventBus, providers::traits::ServiceProvider,
-    task_manager::TaskManager,
-};
+use crate::{app_context::AppState, providers::traits::ServiceProvider, task_manager::TaskManager};
 
 /// RGB fan lighting control service provider.
 ///
@@ -49,12 +45,15 @@ use crate::{
 /// ```no_run
 /// use std::sync::Arc;
 /// use tt_riingd::providers::FanColorControlServiceProvider;
-/// use tt_riingd::event::EventBus;
-/// use tt_riingd::app_context::AppState;
+/// use tt_riingd::core::event::MessageBroker;
+/// use tt_riingd::core::AppState;
+/// use tt_riingd::config::{Config, ConfigManager};
 ///
 /// # async fn example(state: Arc<AppState>) -> anyhow::Result<()> {
-/// let event_bus = EventBus::new();
-/// let provider = FanColorControlServiceProvider::new(state, event_bus);
+/// let event_bus = MessageBroker::new();
+/// let config = Config::default();
+/// let config_manager = ConfigManager::load(None).await?;
+/// let provider = FanColorControlServiceProvider::new(state, event_bus, &config_manager).await;
 /// // Use with TaskManager to start the service
 /// # Ok(())
 /// # }
@@ -66,7 +65,7 @@ struct FanColorServiceCache {
 
 pub struct FanColorControlServiceProvider {
     state: Arc<AppState>,
-    event_bus: EventBus,
+    event_bus: MessageBroker,
     cache: FanColorServiceCache,
 }
 
@@ -106,7 +105,11 @@ impl DoubleBuffer {
 
 impl FanColorControlServiceProvider {
     /// Creates a new fan color control service provider.
-    pub async fn new(state: Arc<AppState>, event_bus: EventBus, config: &ConfigManager) -> Self {
+    pub async fn new(
+        state: Arc<AppState>,
+        event_bus: MessageBroker,
+        config: &ConfigManager,
+    ) -> Self {
         Self {
             state,
             event_bus,
@@ -176,7 +179,7 @@ impl ServiceProvider for FanColorControlServiceProvider {
 
 async fn run_calculate_colors_service(
     state: Arc<AppState>,
-    event_bus: EventBus,
+    event_bus: MessageBroker,
     buffer: Arc<DoubleBuffer>,
     cancel_token: CancellationToken,
     runners: Arc<ArcSwap<EffectStore>>,
@@ -279,7 +282,7 @@ async fn handle_notify(
 
 async fn run_transmit_color_changes(
     state: Arc<AppState>,
-    event_bus: EventBus,
+    event_bus: MessageBroker,
     buffer: Arc<DoubleBuffer>,
     cancel_token: CancellationToken,
 ) -> Result<()> {
@@ -303,7 +306,7 @@ async fn run_transmit_color_changes(
 
 async fn calculate_fan_colors(
     state: &Arc<AppState>,
-    _event_bus: &EventBus,
+    _event_bus: &MessageBroker,
     buffer: Arc<DoubleBuffer>,
     runners: Arc<ArcSwap<EffectStore>>,
 ) -> Result<()> {
@@ -367,7 +370,7 @@ async fn calculate_fan_colors(
 
 async fn transmit_color_changes(
     state: Arc<AppState>,
-    _event_bus: &EventBus,
+    _event_bus: &MessageBroker,
     buffer: Arc<DoubleBuffer>,
 ) -> Result<()> {
     let read_buffer = buffer.get_read_buffer().await;
