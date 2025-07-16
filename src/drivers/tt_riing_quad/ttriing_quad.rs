@@ -1,5 +1,5 @@
 use crate::{
-    config::{ControllerCfg, UsbSelector},
+    config::{ControllerCfg, FanCfg, UsbSelector},
     drivers::{HardwareFingerprint, fan_controller::FanController, registry::HardwareInfo},
 };
 use std::sync::Arc;
@@ -193,7 +193,12 @@ impl TTRiingQuad {
                 pid: fingerprint.product_id,
                 serial: fingerprint.serial.clone(),
             },
-            fans: vec![],
+            fans: (1..=5)
+                .map(|idx| FanCfg {
+                    idx,
+                    name: format!("Fan {idx}"),
+                })
+                .collect(),
         }
     }
 

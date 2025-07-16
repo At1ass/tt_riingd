@@ -272,6 +272,11 @@ impl Registry {
                     }
                     Some(controller)
                 } else {
+                    warn!(
+                        "Failed to create controller from configuration: {:?}, error: {}",
+                        controller_cfg,
+                        created.unwrap_err()
+                    );
                     None
                 }
             })
