@@ -163,6 +163,14 @@
 //! # }
 //! ```
 
+// Core configuration modules
+pub mod curves;
+pub mod location;
+pub mod manager;
+pub mod structures;
+pub mod validation;
+
+// Legacy modules for backward compatibility
 pub mod cfg;
 pub mod fan_curve;
 pub mod mappings;
@@ -171,9 +179,15 @@ pub mod mappings;
 pub mod tests;
 
 pub use crate::core::event::ConfigChangeType;
-pub use cfg::{
-    Config, ConfigManager, ControllerCfg, CurveCfg, CurveMappingCfg, EffectCfg, EffectMappingCfg,
-    FanCfg, FanTarget, MappingCfg, SensorCfg, UsbSelector,
+
+// Re-export from new modular structure
+pub use location::locate_config;
+pub use manager::ConfigManager;
+pub use structures::{
+    Config, ControllerCfg, CurveCfg, CurveMappingCfg, EffectCfg, EffectMappingCfg, FanCfg,
+    FanTarget, MappingCfg, SensorCfg, UsbSelector,
 };
+
+// Legacy re-exports for backward compatibility
 pub use fan_curve::{FanCurve, Point};
 pub use mappings::{CurveMapping, EffectMapping, EffectStore, FanRef, Mapping};
