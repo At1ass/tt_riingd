@@ -12,14 +12,11 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use tt_riingd::{
+    buffer::{ColorBufferData, ControllerEntry, SpeedBufferData},
     config::{Config, ControllerCfg},
     drivers::fan_controller::FanController,
     fan_curve::Point,
 };
-
-// Type aliases to reduce complexity
-pub type SpeedBatch = Vec<(usize, u8)>;
-pub type ColorBatch = Vec<(usize, Vec<(u8, u8, u8)>)>;
 
 /// Mock implementation of FanController for testing hardware interactions.
 ///
@@ -30,8 +27,16 @@ pub type ColorBatch = Vec<(usize, Vec<(u8, u8, u8)>)>;
 #[allow(dead_code)]
 pub trait MockableFanController: Send + Sync {
     async fn send_init(&self) -> Result<()>;
-    async fn update_speed_batch(&self, batch: SpeedBatch) -> Result<()>;
-    async fn update_color_batch(&self, batch: ColorBatch) -> Result<()>;
+    async fn update_speed_batch(
+        &self,
+        batch: Arc<SpeedBufferData>,
+        controller_entry: ControllerEntry,
+    ) -> Result<()>;
+    async fn update_color_batch(
+        &self,
+        batch: Arc<ColorBufferData>,
+        controller_entry: ControllerEntry,
+    ) -> Result<()>;
     async fn firmware_version(&self) -> Result<(u8, u8, u8)>;
     fn led_count(&self) -> usize;
     async fn get_id(&self) -> String;
@@ -71,16 +76,20 @@ impl<T: FanController> MockableFanController for FanControllerAdapter<T> {
         self.inner.send_init().await
     }
 
-    async fn update_speed_batch(&self, batch: SpeedBatch) -> Result<()> {
-        self.inner.update_speed_batch(&batch).await
+    async fn update_speed_batch(
+        &self,
+        batch: Arc<SpeedBufferData>,
+        controller_entry: ControllerEntry,
+    ) -> Result<()> {
+        self.inner.update_speed_batch(batch, controller_entry).await
     }
 
-    async fn update_color_batch(&self, batch: ColorBatch) -> Result<()> {
-        let converted: Vec<(usize, &[(u8, u8, u8)])> = batch
-            .iter()
-            .map(|(channel, colors)| (*channel, colors.as_slice()))
-            .collect();
-        self.inner.update_color_batch(&converted).await
+    async fn update_color_batch(
+        &self,
+        batch: Arc<ColorBufferData>,
+        controller_entry: ControllerEntry,
+    ) -> Result<()> {
+        self.inner.update_color_batch(batch, controller_entry).await
     }
 
     async fn firmware_version(&self) -> Result<(u8, u8, u8)> {
@@ -88,7 +97,9 @@ impl<T: FanController> MockableFanController for FanControllerAdapter<T> {
     }
 
     fn led_count(&self) -> usize {
-        self.inner.led_count()
+        // FanController trait doesn't have led_count method anymore
+        // Return a mock value for testing
+        52 // Default LED count for TTRiingQuad
     }
 
     async fn get_id(&self) -> String {
@@ -442,4 +453,37 @@ macro_rules! expect_firmware_version {
             .times(1)
             .returning(move || Ok($version));
     };
+}
+
+/// Helper functions for creating test data with new API types.
+#[allow(dead_code)]
+pub mod test_helpers {
+    use super::*;
+
+    /// Creates a SpeedBufferData for testing speed updates.
+    pub fn create_speed_buffer() -> Arc<SpeedBufferData> {
+        Arc::new(SpeedBufferData::default())
+    }
+
+    /// Creates a ControllerEntry for testing.
+    pub fn create_controller_entry(
+        id: &str,
+        offset: usize,
+        max_channels: usize,
+        leds_per_channel: usize,
+        active_channels: u32,
+    ) -> ControllerEntry {
+        ControllerEntry::new_for_testing(
+            id.to_string(),
+            offset,
+            max_channels,
+            leds_per_channel,
+            active_channels,
+        )
+    }
+
+    /// Creates a default ControllerEntry for simple tests.
+    pub fn default_controller_entry() -> ControllerEntry {
+        create_controller_entry("test_controller", 0, 4, 13, 0b1111)
+    }
 }

@@ -4,8 +4,9 @@ use super::super::fan_color::*;
 use crate::{
     config::{Config, EffectCfg, EffectMappingCfg, FanTarget},
     core::{
-        AppState, TaskManager,
+        app_context::AppState,
         event::{Event, MessageBroker},
+        task_manager::TaskManager,
     },
     providers::traits::ServiceProvider,
 };

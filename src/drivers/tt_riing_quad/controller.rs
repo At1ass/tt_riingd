@@ -1,6 +1,8 @@
 use anyhow::{Result, anyhow};
 use arrayvec::ArrayVec;
 
+use crate::buffer::Rgb;
+
 use super::{
     device_io::DeviceIO,
     protocol::{Command, Response},
@@ -144,7 +146,7 @@ impl<Io: DeviceIO> Controller<Io> {
     /// # Errors
     ///
     /// Returns an error if communication fails or parameters are invalid.
-    pub fn set_rgb(&self, port: u8, mode: u8, colors: &[(u8, u8, u8)]) -> Result<()> {
+    pub fn set_rgb(&self, port: u8, mode: u8, colors: &[Rgb]) -> Result<()> {
         match self.request(Command::SetRgb { port, mode, colors }) {
             Ok(Response::Status(0xFC)) => Ok(()),
             Ok(_) => Err(anyhow!("Invalid set rgb response: Expected status 0xFC")),

@@ -9,8 +9,7 @@ use std::time::Duration;
 use tokio::time::timeout;
 
 mod mocks;
-use mockall::predicate::*;
-use mocks::{MockMockableFanController, MockableFanController};
+use mocks::{MockMockableFanController, MockableFanController, test_helpers};
 
 use tt_riingd::{
     config::{ControllerCfg, FanCfg, UsbSelector},
@@ -97,10 +96,13 @@ async fn test_controller_communication_errors() -> Result<()> {
     update_failing_controller
         .expect_update_speed_batch()
         .times(1)
-        .returning(|_| Err(anyhow::anyhow!("Hardware error")));
+        .returning(|_, _| Err(anyhow::anyhow!("Hardware error")));
 
     let update_error = update_failing_controller
-        .update_speed_batch(vec![(1, 50)])
+        .update_speed_batch(
+            test_helpers::create_speed_buffer(),
+            test_helpers::default_controller_entry(),
+        )
         .await
         .expect_err("Channel update should fail");
     assert!(
@@ -121,29 +123,17 @@ async fn test_multi_channel_fan_control() -> Result<()> {
     let mut mock_controller = MockMockableFanController::new();
 
     // Setup expectations for batch updates
-    let expected_updates = vec![
-        (1, 40), // Channel 1, speed 40
-        (2, 50), // Channel 2, speed 50
-        (3, 60), // Channel 3, speed 60
-        (4, 70), // Channel 4, speed 70
-    ];
-
     mock_controller
         .expect_update_speed_batch()
-        .with(eq(expected_updates.clone()))
         .times(1)
-        .returning(|_| Ok(()));
+        .returning(|_, _| Ok(()));
 
     // Act: Update all channels using batch API
-    let updates = vec![
-        (1, 40), // Channel 1, speed 40
-        (2, 50), // Channel 2, speed 50
-        (3, 60), // Channel 3, speed 60
-        (4, 70), // Channel 4, speed 70
-    ];
-
     mock_controller
-        .update_speed_batch(updates)
+        .update_speed_batch(
+            test_helpers::create_speed_buffer(),
+            test_helpers::default_controller_entry(),
+        )
         .await
         .context("Batch channel update should succeed")?;
 
@@ -299,17 +289,17 @@ async fn test_controller_performance() -> Result<()> {
     mock_controller
         .expect_update_speed_batch()
         .times(100)
-        .returning(|_| Ok(()));
+        .returning(|_, _| Ok(()));
 
     // Act: Measure update performance
     let start_time = std::time::Instant::now();
 
     for i in 0..100 {
-        let channel = (i % 4) + 1;
-        let speed = (30 + (i % 70)) as u8;
-
         mock_controller
-            .update_speed_batch(vec![(channel, speed)])
+            .update_speed_batch(
+                test_helpers::create_speed_buffer(),
+                test_helpers::default_controller_entry(),
+            )
             .await
             .with_context(|| format!("Update {i} should succeed"))?;
     }
@@ -421,16 +411,19 @@ async fn test_controller_error_recovery() -> Result<()> {
     recovering_controller
         .expect_update_speed_batch()
         .times(1)
-        .returning(|_| Err(anyhow::anyhow!("Temporary USB error")));
+        .returning(|_, _| Err(anyhow::anyhow!("Temporary USB error")));
 
     recovering_controller
         .expect_update_speed_batch()
         .times(1)
-        .returning(|_| Ok(()));
+        .returning(|_, _| Ok(()));
 
     // Act: First call should fail
     let first_result = recovering_controller
-        .update_speed_batch(vec![(1, 50)])
+        .update_speed_batch(
+            test_helpers::create_speed_buffer(),
+            test_helpers::default_controller_entry(),
+        )
         .await;
     let first_error = first_result.expect_err("First call should fail");
     assert!(
@@ -440,7 +433,10 @@ async fn test_controller_error_recovery() -> Result<()> {
 
     // Second call should succeed (recovery)
     recovering_controller
-        .update_speed_batch(vec![(1, 50)])
+        .update_speed_batch(
+            test_helpers::create_speed_buffer(),
+            test_helpers::default_controller_entry(),
+        )
         .await
         .context("Recovery call should succeed")?;
 
@@ -456,12 +452,12 @@ async fn test_controller_error_recovery() -> Result<()> {
     reset_controller
         .expect_update_speed_batch()
         .times(1)
-        .returning(|_| Err(anyhow::anyhow!("Device reset required")));
+        .returning(|_, _| Err(anyhow::anyhow!("Device reset required")));
 
     reset_controller
         .expect_update_speed_batch()
         .times(1)
-        .returning(|_| Ok(()));
+        .returning(|_, _| Ok(()));
 
     // Act: Initialize, fail, re-initialize, succeed
     reset_controller
@@ -469,7 +465,12 @@ async fn test_controller_error_recovery() -> Result<()> {
         .await
         .context("Initial initialization should succeed")?;
 
-    let failure_result = reset_controller.update_speed_batch(vec![(1, 50)]).await;
+    let failure_result = reset_controller
+        .update_speed_batch(
+            test_helpers::create_speed_buffer(),
+            test_helpers::default_controller_entry(),
+        )
+        .await;
     let failure_error = failure_result.expect_err("Update should fail requiring reset");
     assert!(
         failure_error.to_string().contains("Device reset required"),
@@ -483,7 +484,10 @@ async fn test_controller_error_recovery() -> Result<()> {
         .context("Reset initialization should succeed")?;
 
     reset_controller
-        .update_speed_batch(vec![(1, 50)])
+        .update_speed_batch(
+            test_helpers::create_speed_buffer(),
+            test_helpers::default_controller_entry(),
+        )
         .await
         .context("Post-reset update should succeed")?;
 

@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/At1ass/tt_riingd/actions/workflows/ci.yml/badge.svg)](https://github.com/At1ass/tt_riingd/actions/workflows/ci.yml)  [![License](https://img.shields.io/badge/license-MIT-green.svg)](#license)
 
-A high-performance, asynchronous Rust daemon for controlling Thermaltake Riing fans on Linux. It provides comprehensive fan speed control, RGB lighting management, and temperature monitoring through a modern, modular architecture.
+A high-performance, asynchronous Rust daemon for controlling Thermaltake Riing fans on Linux. Features comprehensive fan speed control, RGB lighting management, temperature monitoring, and hotplug device support through a modern, modular architecture with zero-copy buffer optimizations.
 
 > **Status:** Active development - Core functionality stable, advanced features in progress.
 
@@ -25,11 +25,12 @@ A high-performance, asynchronous Rust daemon for controlling Thermaltake Riing f
 
 ### Core Functionality
 * **Asynchronous Architecture** - Built with [Tokio](https://tokio.rs/) for high-performance, non-blocking operations
+* **Zero-Copy Buffers** - Optimized buffer system with trait-based strategies for maximum performance
 * **HID Driver Support** - Native support for Thermaltake Riing controllers (PID 0x232B–0x232E)
-* **Hotplug Support** - Automatic detection and management of USB device connect/disconnect events
+* **Hotplug Support** - Automatic detection and management of USB device connect/disconnect events via udev
 * **Temperature Monitoring** - Integrated lm-sensors and NVIDIA GPU support with configurable polling
 * **Advanced Fan Curves** - Support for constant, step-based, and smooth Bézier curves
-* **RGB Control** - Full RGB lighting control with temperature-based color mapping
+* **RGB Control** - Full RGB lighting control with temperature-based color mapping and visual effects
 * **Hot Configuration Reload** - Dynamic configuration updates without daemon restart
 * **Hardware Fingerprinting** - Stable controller identification across reconnections
 
@@ -47,17 +48,18 @@ A high-performance, asynchronous Rust daemon for controlling Thermaltake Riing f
 * **Security** - Udev rules for non-root access, systemd hardening
 
 ### Architecture Highlights
-* **Modular Service Architecture** - Plugin-based service providers
-* **Event-Driven Design** - Async event bus for inter-service communication
-* **Comprehensive Testing** - 186+ tests (unit, integration, and documentation) with edge case coverage
-* **Performance Monitoring** - Built-in metrics and health checks
-* **Zero Runtime Dependencies** - Minimal dependency footprint
+* **Modular Service Architecture** - Plugin-based service providers with priority-based startup
+* **Message-Driven Design** - Type-safe message broker with compile-time routing guarantees
+* **Comprehensive Testing** - 188+ tests (152 unit, 36 integration, 23 documentation) with edge case coverage
+* **High-Performance Buffers** - Specialized buffer implementations with double/single buffering strategies
+* **Performance Monitoring** - Built-in metrics and health checks with tokio-console support
+* **Zero Runtime Dependencies** - Minimal dependency footprint with static linking
 
 ## System Requirements
 
 - **OS**: Linux (kernel 3.0+)
 - **Hardware**: Thermaltake Riing controllers
-- **Rust**: 1.70+ (for building from source)
+- **Rust**: 1.75+ with Edition 2024 support (for building from source)
 - **Dependencies**: `libudev-dev`, `libhidapi-dev`
 - **Optional**: NVIDIA drivers (for GPU temperature monitoring)
 
@@ -76,8 +78,11 @@ git clone https://github.com/At1ass/tt_riingd.git
 cd tt_riingd
 cargo build --release
 
-# Install binary
-sudo install -Dm755 target/release/tt-riingd /usr/local/bin/tt-riingd
+# Install user service with automated setup
+./install_user.sh
+
+# Or install binary manually  
+sudo install -Dm755 target/release/tt_riingd /usr/local/bin/tt_riingd
 sudo install -Dm755 riingctl /usr/local/bin/riingctl
 ```
 
@@ -337,29 +342,34 @@ busctl --user call io.github.tt_riingd /io/github/tt_riingd io.github.tt_riingd1
 ┌─────────────────────────────────────────────────────────────┐
 │                    Application Layer                        │
 ├─────────────────────────────────────────────────────────────┤
-│  SystemCoordinator │ TaskManager │ EventBus │ ConfigManager │
+│  SystemCoordinator │ TaskManager │ MessageBroker │ AppState │
 ├─────────────────────────────────────────────────────────────┤
-│                    Service Providers                        │
-│  • MonitoringService    • BroadcastService                  │
-│  • FanColorService      • DBusService                       │
-│  • ConfigWatcherService                                     │
+│              Service Providers (Priority-Based)            │
+│  • MonitoringService (10) • FanColorService (4)            │
+│  • BroadcastService (3)   • DBusService (2)                │
+│  • ConfigWatcherService   • UdevWatcherService             │
+├─────────────────────────────────────────────────────────────┤
+│                   Buffer System (New!)                     │
+│  • ColorBuffer (RGB LEDs) • SpeedBuffer (Fan Control)      │
+│  • DoubleBufferStrategy   • SingleBufferStrategy           │
+│  • Layout Management     • Zero-Copy Snapshots            │
 ├─────────────────────────────────────────────────────────────┤
 │                    Hardware Abstraction                     │
-│  • FanController       • TemperatureSensors                 │
-│  • TTRiingQuad Driver   • LmSensors Integration             │
-│  • NVIDIA GPU Support                                       │
+│  • FanController Trait   • TemperatureSensors              │
+│  • TTRiingQuad Driver    • Registry & Fingerprinting       │
+│  • LmSensors Integration • NVIDIA GPU Support              │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ### Key Components
 
-- **SystemCoordinator**: Orchestrates service lifecycle and dependencies
-- **TaskManager**: Manages async tasks with graceful shutdown  
-- **EventBus**: Pub/sub system for inter-service communication
-- **ConfigManager**: Hot-reloadable configuration with validation
-- **Registry**: Hardware detection and configuration management with caching
-- **UdevWatcher**: Linux udev integration for hotplug device detection
-- **Service Providers**: Modular, pluggable service architecture
+- **SystemCoordinator**: DI container and service lifecycle orchestration with priority-based startup
+- **TaskManager**: Async task management with graceful shutdown and cancellation tokens
+- **MessageBroker**: Type-safe message routing system replacing traditional event bus
+- **AppState**: Shared state management with Arc<RwLock> for configuration and hardware
+- **Registry**: Hardware detection, fingerprinting, and configuration caching for hotplug support
+- **UdevWatcher**: Linux udev integration for automatic device detection via tokio-udev
+- **Buffer System**: High-performance buffer implementations with layout management and snapshots
 
 ### Hotplug Architecture
 
@@ -399,19 +409,19 @@ cargo build --all-features
 ### Testing
 
 ```bash
-# Run all tests (186+ tests total)
+# Run all tests (188 tests total: 152 unit + 36 integration + 23 doc)
 cargo test
 
-# Run unit tests only (133 tests)
+# Run unit tests only (152 tests)
 cargo test --lib
 
-# Run integration tests (36 tests)
-cargo test --test integration_controllers
-cargo test --test integration_monitoring
-cargo test --test integration_e2e
-cargo test --test integration_config_reload
+# Run integration tests (36 tests total)
+cargo test --test integration_controllers      # 9 tests - hotplug hardware
+cargo test --test integration_monitoring       # 10 tests - monitoring service
+cargo test --test integration_e2e             # 10 tests - end-to-end
+cargo test --test integration_config_reload    # 7 tests - hot reload
 
-# Run documentation tests (17 tests)
+# Run documentation tests (23 tests)
 cargo test --doc
 
 # Run with coverage
@@ -509,10 +519,11 @@ See [ROADMAP.md](ROADMAP.md) for planned features and milestones.
 
 ### Recently Completed
 
-- [x] **Hotplug Support** - Automatic USB device detection and management
+- [x] **Buffer System Refactoring** - High-performance zero-copy buffer implementations with trait-based strategies
+- [x] **Message-Driven Architecture** - Type-safe MessageBroker replacing EventBus with compile-time guarantees
+- [x] **Hotplug Support** - Automatic USB device detection and management via udev integration
 - [x] **Hardware Fingerprinting** - Stable controller identification across reconnections
-- [x] **Enhanced Testing** - Comprehensive test suite with 186+ tests
-- [x] **Improved Architecture** - Event-driven design with modular service providers
+- [x] **Enhanced Testing** - Comprehensive test suite with 188+ tests including property-based testing
 
 ### Upcoming Features
 
@@ -540,8 +551,8 @@ sudo udevadm control --reload && sudo udevadm trigger
 
 **Configuration Errors**
 ```bash
-# Validate configuration
-tt-riingd --config config.yml --validate
+# Validate configuration without starting
+cargo run -- --config config.yml --validate
 
 # Check logs for details
 journalctl --user -u tt-riingd -n 50

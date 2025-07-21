@@ -21,32 +21,10 @@ use std::{
 use tokio::{fs, sync::RwLock};
 use tracing::{debug, info};
 
-/// Configuration manager that handles both config data and file operations.
+/// Configuration manager for loading, reloading, and managing configuration files.
 ///
-/// Provides a unified interface for loading, reloading, and managing configuration
-/// without exposing the underlying file path to the rest of the application.
-///
-/// # Example
-///
-/// ```no_run
-/// use tt_riingd::config::ConfigManager;
-/// use std::path::PathBuf;
-///
-/// # async fn example() -> anyhow::Result<()> {
-/// // Load from specific path
-/// let config_manager = ConfigManager::load(Some(PathBuf::from("config.yml"))).await?;
-///
-/// // Load from standard locations
-/// let config_manager = ConfigManager::load(None).await?;
-///
-/// // Access configuration
-/// let tick_seconds = config_manager.get().await.tick_seconds;
-///
-/// // Reload configuration
-/// config_manager.reload().await?;
-/// # Ok(())
-/// # }
-/// ```
+/// Provides unified interface for configuration operations with automatic location
+/// resolution and validation.
 #[derive(Debug, Clone)]
 pub struct ConfigManager {
     config: Arc<RwLock<Config>>,
@@ -253,7 +231,7 @@ effect_mappings: []
             .unwrap();
         assert_eq!(config.version, 1);
         assert_eq!(config.tick_seconds, 5);
-        assert_eq!(config.enable_broadcast, true);
+        assert!(config.enable_broadcast);
     }
 
     #[tokio::test]

@@ -1,8 +1,12 @@
 //! Fan controller abstraction and trait definitions.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use async_trait::async_trait;
 use hidapi::DeviceInfo;
+
+use crate::buffer::{ColorBufferData, ControllerEntry, SpeedBufferData};
 
 use super::registry::HardwareInfo;
 
@@ -16,18 +20,20 @@ use super::registry::HardwareInfo;
 /// ```no_run
 /// use tt_riingd::drivers::fan_controller::FanController;
 /// use tt_riingd::drivers::registry::HardwareInfo;
+/// use tt_riingd::buffer::{ControllerEntry, ColorBufferData, SpeedBufferData};
 /// use anyhow::Result;
+/// use std::sync::Arc;
 ///
 /// struct MockController;
 ///
 /// #[async_trait::async_trait]
 /// impl FanController for MockController {
 ///     async fn send_init(&self) -> Result<()> { Ok(()) }
-///     async fn update_speed_batch(&self, batch: &[(usize, u8)]) -> Result<()> { Ok(()) }
-///     async fn update_color_batch(&self, batch: &[(usize, &[(u8, u8, u8)])]) -> Result<()> { Ok(()) }
+///     async fn update_speed_batch(&self, batch: Arc<SpeedBufferData>, controller_entry: ControllerEntry) -> Result<()> { Ok(()) }
+///     async fn update_color_batch(&self, batch: Arc<ColorBufferData>, controller_entry: ControllerEntry) -> Result<()> { Ok(()) }
 ///     async fn firmware_version(&self) -> Result<(u8, u8, u8)> { Ok((1, 0, 0)) }
 ///     async fn get_device_info(&self) -> Result<hidapi::DeviceInfo> { todo!() }
-///     fn led_count(&self) -> usize { 4 }
+///
 ///     async fn get_id(&self) -> String { "mock".to_string() }
 ///     async fn get_fingerprint(&self) -> Result<tt_riingd::drivers::HardwareFingerprint> { todo!() }
 ///     fn hardware_info() -> tt_riingd::drivers::registry::HardwareInfo
@@ -35,6 +41,7 @@ use super::registry::HardwareInfo;
 ///         tt_riingd::drivers::registry::HardwareInfo {
 ///             vid: 0x1234, pids: vec![0x5678], channel_count: 4,
 ///             name: "Mock".to_string(),
+///             led_count: 52,
 ///             create_fallback_config: |_| todo!(),
 ///         }
 ///     }
@@ -49,18 +56,24 @@ pub trait FanController: Send + Sync + core::fmt::Debug {
     async fn send_init(&self) -> Result<()>;
 
     /// Updates multiple channels with a batch of (temperature, speed) pairs.
-    async fn update_speed_batch(&self, batch: &[(usize, u8)]) -> Result<()>;
+    // async fn update_speed_batch(&self, batch: &[(usize, u8)]) -> Result<()>;
+    async fn update_speed_batch(
+        &self,
+        batch: Arc<SpeedBufferData>,
+        controller_entry: ControllerEntry,
+    ) -> Result<()>;
 
     /// Updates multiple channels with a batch of (channel index, temperature, speed) tuples.
-    async fn update_color_batch(&self, batch: &[(usize, &[(u8, u8, u8)])]) -> Result<()>;
+    async fn update_color_batch(
+        &self,
+        batch: Arc<ColorBufferData>,
+        controller_entry: ControllerEntry,
+    ) -> Result<()>;
 
     /// Returns the firmware version as (major, minor, patch).
     async fn firmware_version(&self) -> Result<(u8, u8, u8)>;
 
     async fn get_device_info(&self) -> Result<DeviceInfo>;
-
-    /// Returns the number of LEDs controlled by this controller.
-    fn led_count(&self) -> usize;
 
     /// Get controller ID
     async fn get_id(&self) -> String;

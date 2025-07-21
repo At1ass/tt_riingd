@@ -5,18 +5,19 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tracing::{error, info};
 
+use crate::buffer::ControllerEntry;
+use crate::buffer::{ColorBufferData, SpeedBufferData};
 use crate::drivers::fan_controller::FanController;
 
-use super::{ColorBufferForSend, ControllerColorBuffer, ControllerColorBufferForSend};
-
-#[derive(Debug)]
 enum ControllerCommand {
     SetSpeeds {
-        data: Vec<(usize, u8)>,
+        data: Arc<SpeedBufferData>,
+        controller_entry: ControllerEntry,
         result_tx: oneshot::Sender<Result<()>>,
     },
     SetColors {
-        data: ControllerColorBuffer,
+        data: Arc<ColorBufferData>,
+        controller_entry: ControllerEntry,
         result_tx: oneshot::Sender<Result<()>>,
     },
     Init {
@@ -24,9 +25,6 @@ enum ControllerCommand {
     },
     GetFirmware {
         result_tx: oneshot::Sender<Result<(u8, u8, u8)>>,
-    },
-    LedCount {
-        result_tx: oneshot::Sender<Result<usize>>,
     },
     Stop {
         result_tx: oneshot::Sender<Result<()>>,
@@ -46,7 +44,6 @@ impl ControllerWorker {
 
         loop {
             tokio::select! {
-                // Приоритет shutdown сигналу
                 _ = self.shutdown_rx.changed() => {
                     if *self.shutdown_rx.borrow() {
                         info!("Controller worker {} received shutdown signal", self.controller_id);
@@ -54,15 +51,14 @@ impl ControllerWorker {
                     }
                 }
 
-                // Обработка команд
                 command = self.command_rx.recv() => {
                     match command {
-                        Some(ControllerCommand::SetSpeeds { data, result_tx }) => {
-                            let result = self.handle_set_speeds(data).await;
+                        Some(ControllerCommand::SetSpeeds { data, controller_entry, result_tx }) => {
+                            let result = self.handle_set_speeds(data, controller_entry).await;
                             let _ = result_tx.send(result);
                         }
-                        Some(ControllerCommand::SetColors { data, result_tx }) => {
-                            let result = self.handle_set_colors(data).await;
+                        Some(ControllerCommand::SetColors { data, controller_entry, result_tx }) => {
+                            let result = self.handle_set_colors(data, controller_entry).await;
                             let _ = result_tx.send(result);
                         }
                         Some(ControllerCommand::Init { result_tx }) => {
@@ -72,10 +68,6 @@ impl ControllerWorker {
                         Some(ControllerCommand::GetFirmware { result_tx }) => {
                             let result = self.handle_get_firmware().await;
                             let _ = result_tx.send(result);
-                        }
-                        Some(ControllerCommand::LedCount { result_tx }) => {
-                            let result = self.controller.led_count();
-                            let _ = result_tx.send(Ok(result));
                         }
                         Some(ControllerCommand::Stop { result_tx }) => {
                             info!("Stopping controller worker {}", self.controller_id);
@@ -94,17 +86,24 @@ impl ControllerWorker {
         info!("Controller worker {} stopped", self.controller_id);
     }
 
-    async fn handle_set_speeds(&self, data: Vec<(usize, u8)>) -> Result<()> {
-        self.controller.update_speed_batch(&data).await
+    async fn handle_set_speeds(
+        &self,
+        data: Arc<SpeedBufferData>,
+        controller_entry: ControllerEntry,
+    ) -> Result<()> {
+        self.controller
+            .update_speed_batch(data, controller_entry)
+            .await
     }
 
-    async fn handle_set_colors(&self, data: ControllerColorBuffer) -> Result<()> {
-        let batch_refs: ControllerColorBufferForSend = data
-            .iter()
-            .map(|(ch, colors)| (*ch, colors.as_slice()))
-            .collect();
-
-        self.controller.update_color_batch(&batch_refs).await
+    async fn handle_set_colors(
+        &self,
+        data: Arc<ColorBufferData>,
+        controller_entry: ControllerEntry,
+    ) -> Result<()> {
+        self.controller
+            .update_color_batch(data, controller_entry)
+            .await
     }
 
     async fn handle_get_firmware(&self) -> Result<(u8, u8, u8)> {
@@ -179,7 +178,8 @@ impl ControllerWorkerManager {
     pub async fn set_colors(
         &self,
         worker_id: u32,
-        colors: &[ColorBufferForSend<'_>],
+        colors: Arc<ColorBufferData>,
+        controller_entry: ControllerEntry,
     ) -> Result<()> {
         let worker_tx = self
             .workers
@@ -188,10 +188,8 @@ impl ControllerWorkerManager {
 
         let (result_tx, result_rx) = oneshot::channel();
         let command = ControllerCommand::SetColors {
-            data: colors
-                .iter()
-                .map(|(ch, rgb_slice)| (*ch, rgb_slice.to_vec()))
-                .collect(),
+            data: colors,
+            controller_entry,
             result_tx,
         };
 
@@ -200,7 +198,12 @@ impl ControllerWorkerManager {
         result_rx.await?
     }
 
-    pub async fn set_speeds(&self, worker_id: u32, speeds: &[(usize, u8)]) -> Result<()> {
+    pub async fn set_speeds(
+        &self,
+        worker_id: u32,
+        speeds: Arc<SpeedBufferData>,
+        controller_entry: ControllerEntry,
+    ) -> Result<()> {
         let worker_tx = self
             .workers
             .get(&worker_id)
@@ -208,7 +211,8 @@ impl ControllerWorkerManager {
 
         let (result_tx, result_rx) = oneshot::channel();
         let command = ControllerCommand::SetSpeeds {
-            data: speeds.to_vec(),
+            data: speeds,
+            controller_entry,
             result_tx,
         };
 
@@ -217,14 +221,17 @@ impl ControllerWorkerManager {
         result_rx.await?
     }
 
-    pub fn try_set_colors(&self, worker_id: u32, colors: &[ColorBufferForSend<'_>]) -> bool {
+    pub fn try_set_colors(
+        &self,
+        worker_id: u32,
+        colors: Arc<ColorBufferData>,
+        controller_entry: ControllerEntry,
+    ) -> bool {
         if let Some(worker_tx) = self.workers.get(&worker_id) {
             let (result_tx, _) = oneshot::channel();
             let command = ControllerCommand::SetColors {
-                data: colors
-                    .iter()
-                    .map(|(ch, rgb_slice)| (*ch, rgb_slice.to_vec()))
-                    .collect(),
+                data: colors,
+                controller_entry,
                 result_tx,
             };
 
@@ -234,11 +241,17 @@ impl ControllerWorkerManager {
         }
     }
 
-    pub fn try_set_speeds(&self, worker_id: u32, speeds: &[(usize, u8)]) -> bool {
+    pub fn try_set_speeds(
+        &self,
+        worker_id: u32,
+        speeds: Arc<SpeedBufferData>,
+        controller_entry: ControllerEntry,
+    ) -> bool {
         if let Some(worker_tx) = self.workers.get(&worker_id) {
             let (result_tx, _) = oneshot::channel();
             let command = ControllerCommand::SetSpeeds {
-                data: speeds.to_vec(),
+                data: speeds,
+                controller_entry,
                 result_tx,
             };
 
@@ -307,20 +320,6 @@ impl ControllerWorkerManager {
 
         let (result_tx, result_rx) = oneshot::channel();
         let command = ControllerCommand::GetFirmware { result_tx };
-
-        worker_tx.send(command).await?;
-
-        result_rx.await?
-    }
-
-    pub async fn led_count(&self, worker_id: u32) -> Result<usize> {
-        let worker_tx = self
-            .workers
-            .get(&worker_id)
-            .ok_or_else(|| anyhow!("Controller {worker_id} not found"))?;
-
-        let (result_tx, result_rx) = oneshot::channel();
-        let command = ControllerCommand::LedCount { result_tx };
 
         worker_tx.send(command).await?;
 

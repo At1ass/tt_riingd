@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
+use futures::{StreamExt, stream::iter};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,6 +9,9 @@ use tokio::{sync::RwLock, time::interval};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 
+use crate::buffer::speed::{SpeedBuffer, SpeedSnapshot};
+use crate::buffer::{Buffer, BufferStrategy, Layout};
+use crate::drivers::registry::ControllerSpec;
 use crate::{
     ConfigManager,
     config::{CurveCfg, CurveMapping, Mapping},
@@ -57,7 +61,7 @@ use crate::{
 /// # Ok(())
 /// # }
 /// ```
-struct MappingCache {
+pub(crate) struct MappingCache {
     /// Cache for mapping data.
     pub mappings: Mapping,
     pub curves: Vec<CurveCfg>,
@@ -78,11 +82,8 @@ impl MappingCache {
 struct MonitoringCache {
     /// Cache for temperature data.
     pub sensor_data: RwLock<HashMap<String, f32>>,
-    pub mapping_cache: Arc<ArcSwap<MappingCache>>,
-    pub new_mapping: Arc<ArcSwap<MappingCache>>,
-    // pub mapping: Mapping,
-    // pub curves: Vec<CurveCfg>,
-    // pub active_curves: CurveMapping,
+    pub mapping_cache: ArcSwap<MappingCache>,
+    pub new_mapping: ArcSwap<MappingCache>,
 }
 
 pub struct MonitoringServiceProvider {
@@ -103,22 +104,147 @@ impl MonitoringServiceProvider {
             event_bus,
             cache: Arc::new(MonitoringCache {
                 sensor_data: RwLock::new(HashMap::new()),
-                mapping_cache: Arc::new(ArcSwap::from_pointee(MappingCache {
+                mapping_cache: ArcSwap::from_pointee(MappingCache {
                     mappings: Mapping::load_mappings(&config.get().await.mappings),
                     curves: config.get().await.curves.clone(),
                     active_curves: CurveMapping::load_mappings(
                         &config.get().await.active_curve_mappings,
                     ),
-                })),
-                new_mapping: Arc::new(ArcSwap::new(Arc::new(MappingCache::new()))),
+                }),
+                new_mapping: ArcSwap::new(Arc::new(MappingCache::new())),
             }),
         }
     }
 }
 
+pub struct FanOffset {
+    offset: usize,
+}
+
+pub struct SensorEntry {
+    pub id: String,
+    pub fans: Vec<FanOffset>,
+}
+
+impl SensorEntry {
+    pub fn set_fans_speed(&self, buffer: &mut [u8], speed: u8) {
+        for fan in &self.fans {
+            buffer[fan.offset] = speed;
+        }
+    }
+}
+
+pub struct CurveEntry {
+    pub id: String,
+    pub curve_cfg_idx: usize,
+    pub sensors_entry: Vec<SensorEntry>,
+}
+
+pub struct OptimizedMonitoringBuffer {
+    pub buffer: SpeedBuffer,
+    pub curve_entry: Vec<CurveEntry>,
+}
+
+impl OptimizedMonitoringBuffer {
+    fn new() -> Self {
+        Self {
+            buffer: Buffer::new(),
+            curve_entry: Vec::new(),
+        }
+    }
+
+    fn calculate_buffer_offset(fan_ref: &FanRef, layout: &Layout) -> usize {
+        let controller = layout
+            .controllers
+            .iter()
+            .find(|c| c.controller_id == fan_ref.controller_id)
+            .expect("Controller not found in layout");
+
+        controller.offset + fan_ref.channel - 1
+    }
+
+    fn build_curve_entry(cache: &MappingCache, layout: &Layout) -> Vec<CurveEntry> {
+        cache
+            .active_curves
+            .get_curve2fans()
+            .iter()
+            .filter_map(|curve| {
+                let curve_name = curve.key();
+                let fans = curve.value();
+
+                let curve_cfg_idx = cache
+                    .curves
+                    .iter()
+                    .position(|c| c.get_id() == *curve_name)?;
+
+                let sensors_entry = fans
+                    .iter()
+                    .filter_map(|fan_ref| {
+                        cache
+                            .mappings
+                            .get_sensor_for_fan(fan_ref.key())
+                            .map(|sensor_entry| (fan_ref.clone(), sensor_entry.clone()))
+                    })
+                    .fold(
+                        std::collections::HashMap::new(),
+                        |mut acc: std::collections::HashMap<String, Vec<_>>,
+                         (fan_ref, sensor_key)| {
+                            acc.entry(sensor_key).or_default().push(fan_ref);
+                            acc
+                        },
+                    )
+                    .into_iter()
+                    .map(|(sensor_key, fan_refs)| {
+                        let fan_offsets = fan_refs
+                            .into_iter()
+                            .map(|fan_ref| {
+                                let offset = Self::calculate_buffer_offset(&fan_ref, layout);
+                                FanOffset { offset }
+                            })
+                            .collect();
+
+                        SensorEntry {
+                            id: sensor_key,
+                            fans: fan_offsets,
+                        }
+                    })
+                    .collect::<Vec<_>>();
+
+                Some(CurveEntry {
+                    id: curve_name.clone(),
+                    curve_cfg_idx,
+                    sensors_entry,
+                })
+            })
+            .collect::<Vec<_>>()
+    }
+
+    /// Creates optimized monitoring buffer from cache, similar to OptimizedBuffer::with_specs
+    pub(crate) fn from_cache(
+        cache: &MappingCache,
+        spec: &[ControllerSpec],
+    ) -> anyhow::Result<Self> {
+        let buffer = Buffer::from_cache(spec);
+        let curve_entry = Self::build_curve_entry(cache, &buffer.layout);
+
+        Ok(Self {
+            buffer,
+            curve_entry,
+        })
+    }
+
+    pub fn take_buffer_snapshot(&mut self) -> SpeedSnapshot {
+        self.buffer.try_take_snapshot()
+    }
+
+    pub fn restore_snapshot(&mut self, snapshot: SpeedSnapshot) -> Result<()> {
+        self.buffer.try_restore_snapshot(snapshot)
+    }
+}
+
 pub struct MonitoringBuffer {
     /// Buffer for batch data to be processed.
-    pub batch_data: HashMap<String, Vec<(usize, u8)>>,
+    pub batch_data: OptimizedMonitoringBuffer,
     pub temp_data: HashMap<String, f32>,
 }
 
@@ -132,15 +258,23 @@ impl MonitoringBuffer {
     /// Creates a new monitoring buffer.
     pub fn new() -> Self {
         Self {
-            batch_data: HashMap::new(),
+            batch_data: OptimizedMonitoringBuffer::new(),
             temp_data: HashMap::new(),
         }
     }
 
+    pub(crate) fn with_specs(
+        cache: &MappingCache,
+        spec: &[ControllerSpec],
+    ) -> anyhow::Result<Self> {
+        let batch_data = OptimizedMonitoringBuffer::from_cache(cache, spec)?;
+        Ok(Self {
+            batch_data,
+            temp_data: HashMap::new(),
+        })
+    }
+
     pub fn clear(&mut self) {
-        // let mut batch_data = self.batch_data.write().await;
-        self.batch_data.clear();
-        // let mut temp_data = self.temp_data.write().await;
         self.temp_data.clear();
     }
 }
@@ -152,14 +286,15 @@ impl ServiceProvider for MonitoringServiceProvider {
         let event_bus = self.event_bus.clone();
         let cache = self.cache.clone();
 
-        // Create a shared buffer for batch data
-        let buffer = Arc::new(RwLock::new(MonitoringBuffer::new()));
+        let spec = state.controllers.read().await.get_controllers_spec();
+        let buffer = Arc::new(RwLock::new(MonitoringBuffer::with_specs(
+            &cache.mapping_cache.load(),
+            &spec,
+        )?));
 
         task_manager
             .spawn_task(self.name().to_string(), |cancel_token| async move {
-                let buffer_m = buffer.clone();
-                run_monitoring_service(state, event_bus, buffer_m, cancel_token, cache.clone())
-                    .await
+                run_monitoring_service(state, event_bus, buffer, cancel_token, cache.clone()).await
             })
             .await
     }
@@ -282,37 +417,6 @@ async fn handle_notify(
     Ok(())
 }
 
-async fn calculate_fan_speed(
-    controller_id: &String,
-    channel: u8,
-    temp: f32,
-    cache: &Arc<MonitoringCache>,
-) -> Result<u8> {
-    let curve_registry: &Vec<_> = &cache.mapping_cache.load().curves;
-
-    let active_curves = &cache.mapping_cache.load().active_curves;
-
-    let curve_name = active_curves
-        .get_curve_for_fan(&FanRef {
-            controller_id: controller_id.clone(),
-            channel: channel as usize,
-        })
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "No active curve found for controller {} channel {}",
-                controller_id,
-                channel
-            )
-        })?;
-
-    let curve = curve_registry
-        .iter()
-        .find(|c| c.get_id() == curve_name)
-        .ok_or_else(|| anyhow::anyhow!("Curve {} not found", curve_name))?;
-
-    curve.calculate_speed(temp)
-}
-
 async fn collect_and_process_temperatures(
     state: &Arc<AppState>,
     _event_bus: &MessageBroker,
@@ -324,54 +428,52 @@ async fn collect_and_process_temperatures(
     batch_data.clear();
 
     let sensors = state.sensors.read().await;
-    for sensor in sensors.iter() {
-        match sensor.read_temperature().await {
-            Ok(temp) => {
-                let sensor_name = sensor.key();
-                batch_data.temp_data.insert(sensor_name.clone(), temp);
-                debug!("Temperature of {sensor_name}: {temp:.2}°C");
-
-                for fan in cache
-                    .mapping_cache
-                    .load()
-                    .mappings
-                    .fans_for_sensor(&sensor_name)
-                {
-                    let controller_id = &fan.controller_id;
-                    let channel = u8::try_from(fan.channel)
-                        .map_err(|_| anyhow::anyhow!("Channel {} too large for u8", fan.channel))?;
-
-                    let speed = calculate_fan_speed(controller_id, channel, temp, &cache)
-                        .await
-                        .context("Failed to calculate fan speed")?;
-
-                    if let Some(entry) = batch_data.batch_data.get_mut(controller_id) {
-                        entry.push((channel as usize, speed));
-                    } else {
-                        batch_data
-                            .batch_data
-                            .entry(controller_id.clone())
-                            .or_default()
-                            .push((channel as usize, speed));
-                    }
+    let sensors_results = iter(sensors.iter())
+        .filter_map(|sensor| {
+            let sensor_name = sensor.key();
+            async move {
+                if let Ok(temp) = sensor.read_temperature().await {
+                    debug!("Temperature of {sensor_name}: {temp:.2}°C");
+                    Some((sensor_name, temp))
+                } else {
+                    error!("Failed to read temperature from sensor {sensor_name}");
+                    None
                 }
             }
-            Err(e) => {
-                error!("Failed to read temperature from sensor: {e}");
+        })
+        .collect::<HashMap<_, _>>()
+        .await;
+    drop(sensors);
+
+    let buffer = &mut batch_data.batch_data;
+
+    for curve in buffer.curve_entry.iter() {
+        for sensor_entry in curve.sensors_entry.iter() {
+            if let Some(temp) = sensors_results.get(&sensor_entry.id) {
+                let speed = cache.mapping_cache.load().curves[curve.curve_cfg_idx]
+                    .calculate_speed(*temp)?;
+                let _ = buffer.buffer.data.try_with_write_access(|data| {
+                    sensor_entry.set_fans_speed(data, speed);
+                });
             }
         }
     }
 
-    let controllers = state.controllers.read().await;
-    controllers
+    let snapshot = buffer.take_buffer_snapshot();
+    state
+        .controllers
+        .read()
+        .await
         .batch_update(
             BatchCommand::SetSpeeds {
-                data: &batch_data.batch_data,
+                data: snapshot.clone(),
             },
             ExecutionMode::Blocking,
         )
         .await
         .context("Failed to update fan speeds in batch")?;
+
+    let _ = buffer.restore_snapshot(snapshot);
 
     *cache.sensor_data.write().await = batch_data.temp_data.clone();
 

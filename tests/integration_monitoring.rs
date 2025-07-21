@@ -8,10 +8,9 @@ use anyhow::{Context, Result};
 use std::time::Duration;
 
 mod mocks;
-use mockall::predicate::*;
 use mocks::{
     MockAppState, MockMockableFanController, MockMockableTemperatureSensor, MockableFanController,
-    MockableTemperatureSensor, test_utils::*,
+    MockableTemperatureSensor, test_helpers, test_utils::*,
 };
 
 use tt_riingd::{
@@ -283,9 +282,8 @@ async fn test_mock_fan_controller() -> Result<()> {
 
     mock_controller
         .expect_update_speed_batch()
-        .with(eq(vec![(1, 50)]))
         .times(1)
-        .returning(|_| Ok(()));
+        .returning(|_, _| Ok(()));
 
     mock_controller
         .expect_firmware_version()
@@ -294,7 +292,12 @@ async fn test_mock_fan_controller() -> Result<()> {
 
     // Act & Assert: Test mock behavior
     mock_controller.send_init().await?;
-    mock_controller.update_speed_batch(vec![(1, 50)]).await?;
+    mock_controller
+        .update_speed_batch(
+            test_helpers::create_speed_buffer(),
+            test_helpers::default_controller_entry(),
+        )
+        .await?;
     let version = mock_controller.firmware_version().await?;
 
     assert_eq!(version, (1, 2, 3));

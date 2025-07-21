@@ -10,7 +10,7 @@ use tokio::{
 
 use crate::config::{EffectCfg, EffectMappingCfg, FanRef};
 
-type RgbStream = Arc<Mutex<Pin<Box<dyn Stream<Item = [u8; 3]> + Send>>>>;
+type RgbStream = Arc<Mutex<Pin<Box<dyn Stream<Item = Option<[u8; 3]>> + Send>>>>;
 
 #[derive(Clone)]
 pub struct EffectRunner {
@@ -26,7 +26,7 @@ impl fmt::Debug for EffectRunner {
 impl EffectRunner {
     pub fn new<S>(stream: S) -> Self
     where
-        S: Stream<Item = [u8; 3]> + Send + 'static,
+        S: Stream<Item = Option<[u8; 3]>> + Send + 'static,
     {
         Self {
             inner: Arc::new(Mutex::new(Box::pin(stream))),
@@ -34,12 +34,14 @@ impl EffectRunner {
     }
 
     pub async fn next_rgb(&self) -> Option<[u8; 3]> {
-        self.inner.lock().await.next().await
+        self.inner.lock().await.next().await?
     }
 
     pub fn constant(rgb: [u8; 3]) -> Self {
         Self::new(stream! {
-            loop { yield rgb; }
+            loop {
+                yield Some(rgb);
+            }
         })
     }
 
@@ -49,7 +51,7 @@ impl EffectRunner {
             loop {
                 let t = (start.elapsed().as_secs_f32() / period.as_secs_f32()) % 1.0;
                 let hue = t * 360.0;
-                yield hsv_to_rgb(hue, 1.0, 1.0);
+                yield Some(hsv_to_rgb(hue, 1.0, 1.0));
             }
         })
     }
@@ -61,7 +63,7 @@ impl EffectRunner {
                 let t = (start.elapsed().as_secs_f32() / period.as_secs_f32()) % 1.0;
                 let phase = (t * std::f32::consts::TAU).sin();
                 let br = min + (max - min) * (phase + 1.0) * 0.5;
-                yield scale_rgb(rgb, br);
+                yield Some(scale_rgb(rgb, br));
             }
         })
     }

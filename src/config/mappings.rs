@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use dashmap::{DashMap, DashSet};
+use itertools::Itertools;
 use tracing::{debug, error};
 
 use crate::config::cfg::{CurveMappingCfg, EffectCfg, EffectMappingCfg, MappingCfg};
@@ -21,7 +22,6 @@ pub type SensorKey = String;
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct FanRef {
     /// Controller index (0-based).
-    // pub controller_id: usize,
     pub controller_id: String,
 
     /// Fan channel on the controller (0-based).
@@ -48,6 +48,8 @@ pub struct Mapping {
 pub struct CurveMapping {
     /// Maps color names to the set of fans that display them.
     fan2curve: DashMap<FanRef, String>,
+    /// Maps curve names to their configurations.
+    curve2fans: DashMap<String, DashSet<FanRef>>,
 }
 
 impl CurveMapping {
@@ -64,13 +66,30 @@ impl CurveMapping {
                     channel: target.fan_idx as usize,
                 };
 
-                acc.fan2curve.insert(fan, curve.clone());
+                acc.fan2curve.insert(fan.clone(), curve.clone());
+                acc.curve2fans.entry(curve.clone()).or_default().insert(fan);
                 acc
             })
     }
 
+    pub fn get_fan2curve(&self) -> &DashMap<FanRef, String> {
+        &self.fan2curve
+    }
+
+    pub fn get_curve2fans(&self) -> &DashMap<String, DashSet<FanRef>> {
+        &self.curve2fans
+    }
+
     pub fn get_curve_for_fan(&self, fan: &FanRef) -> Option<String> {
         self.fan2curve.get(fan).map(|r| r.value().clone())
+    }
+
+    pub fn get_all_curves(&self) -> Vec<String> {
+        self.fan2curve
+            .iter()
+            .map(|r| r.value().clone())
+            .unique()
+            .collect()
     }
 }
 
@@ -194,6 +213,10 @@ impl Mapping {
                     .insert(fan.clone());
                 acc
             })
+    }
+
+    pub fn get_sensor_for_fan(&self, fan: &FanRef) -> Option<SensorKey> {
+        self.fans2sensor.get(fan).map(|r| r.value().clone())
     }
 
     /// Gets all fans controlled by a specific sensor.

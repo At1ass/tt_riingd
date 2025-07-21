@@ -19,9 +19,9 @@ fn set_speed_bytes_and_parse_status() {
 fn get_data_parse() {
     let cmd = Command::GetData { port: 1 };
     let mut buf = [0u8; 193];
-    buf[2] = 55;
-    buf[3] = 0x10;
-    buf[4] = 0x20; // rpm = 0x2010 = 8208
+    buf[4] = 55; // DATA_SPEED_OFFSET = 4
+    buf[5] = 0x10; // DATA_RPM_LOW_OFFSET = 5
+    buf[6] = 0x20; // DATA_RPM_HIGH_OFFSET = 6, rpm = 0x2010 = 8208
     let resp = Response::parse(cmd, &buf).unwrap();
     match resp {
         Response::Data { speed, rpm } => {

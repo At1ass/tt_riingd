@@ -10,29 +10,7 @@ use serde::{Deserialize, Serialize};
 /// Main configuration structure for the tt_riingd daemon.
 ///
 /// Contains all configuration parameters including controllers, curves,
-/// sensors, and operational settings. This structure is deserialized
-/// from the YAML configuration file.
-///
-/// # Example
-///
-/// ```yaml
-/// version: 1
-/// tick_seconds: 2
-/// enable_broadcast: false
-/// broadcast_interval: 2
-///
-/// controllers:
-///   - kind: riing-quad
-///     id: "controller1"
-///     usb:
-///       vid: 0x264a
-///       pid: 0x2330
-///     fans:
-///       - idx: 1
-///         name: "CPU Fan"
-///         active_curve: "cpu_curve"
-///         curve: ["cpu_curve"]
-/// ```
+/// sensors, and operational settings. Deserialized from YAML configuration file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Configuration version for compatibility checking.

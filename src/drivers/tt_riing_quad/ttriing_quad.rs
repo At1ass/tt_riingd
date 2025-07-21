@@ -1,4 +1,5 @@
 use crate::{
+    buffer::{ColorBufferData, ControllerEntry, Rgb, SpeedBufferData},
     config::{ControllerCfg, FanCfg, UsbSelector},
     drivers::{HardwareFingerprint, fan_controller::FanController, registry::HardwareInfo},
 };
@@ -26,6 +27,8 @@ use super::controller::{Controller, Fan};
 /// use tt_riingd::drivers::tt_riing_quad::TTRiingQuad;
 /// use tt_riingd::drivers::fan_controller::FanController;
 /// use tt_riingd::config::{ControllerCfg, UsbSelector, FanCfg};
+/// use tt_riingd::buffer::{SpeedBufferData, ControllerEntry};
+/// use std::sync::Arc;
 ///
 /// # async fn example() -> anyhow::Result<()> {
 /// let api = HidApi::new()?;
@@ -35,10 +38,18 @@ use super::controller::{Controller, Fan};
 ///     fans: vec![FanCfg { idx: 1, name: "Fan 1".to_string() }],
 /// }];
 /// let controllers = TTRiingQuad::find_controllers(&api, &config)?;
+/// let speed_data = Arc::new(SpeedBufferData::default());
+/// let controller_entry = ControllerEntry::new_for_testing(
+///     "main".to_string(),
+///     0,
+///     4,
+///     13,
+///     0b1111,
+/// );
 ///
 /// for controller in controllers {
 ///     controller.send_init().await?;
-///     controller.update_speed_batch(&[(1, 50)]).await?;
+///     controller.update_speed_batch(speed_data.clone(), controller_entry.clone()).await?;
 /// }
 /// # Ok(())
 /// # }
@@ -58,32 +69,58 @@ impl FanController for TTRiingQuad {
         Ok(())
     }
 
-    async fn update_speed_batch(&self, batch: &[(usize, u8)]) -> Result<()> {
+    async fn update_speed_batch(
+        &self,
+        batch: Arc<SpeedBufferData>,
+        controller_entry: ControllerEntry,
+    ) -> Result<()> {
         debug!("Batch processing speed");
         let mut guard = self.0.lock().await;
         let result = {
-            batch
-                .iter()
-                .map(|(idx, speed)| {
-                    Self::proccess_fan_inner(&guard, *idx, *speed)
-                        .map(|(speed, rpm)| (idx, speed, rpm))
+            (1..=5)
+                .filter_map(|channel| {
+                    if 1u32 << (channel - 1) & controller_entry.active_channels == 0 {
+                        return None; // Skip channels not in the mask
+                    }
+                    let index = controller_entry.offset + (channel - 1);
+                    Some(
+                        Self::proccess_fan_inner(&guard, channel, batch.data[index])
+                            .map(|(speed, rpm)| (channel, speed, rpm)),
+                    )
                 })
                 .collect::<Result<Vec<_>>>()
         }?;
 
         result.into_iter().for_each(|(channel, speed, rpm)| {
+            debug!(
+                "Processing fan {}: speed = {}, rpm = {}",
+                channel, speed, rpm
+            );
             guard.fans[channel - 1].update_stats(speed, rpm);
         });
+        debug!("Speed batch processed successfully for TTRiingQuad controller");
+        debug!("Fan speeds: {:#?}", guard.fans);
+
         Ok(())
     }
 
-    async fn update_color_batch(&self, batch: &[(usize, &[(u8, u8, u8)])]) -> Result<()> {
-        debug!("Batch processing speed");
+    async fn update_color_batch(
+        &self,
+        batch: Arc<ColorBufferData>,
+        controller_entry: ControllerEntry,
+    ) -> Result<()> {
+        debug!("Batch processing colors");
         let guard = self.0.lock().await;
-        batch.iter().try_fold((), |_, (idx, buffer)| {
-            Self::proccess_fan_inner_color(&guard, *idx, buffer)
-                .map_err(|e| anyhow::anyhow!("Failed to set color for fan {}: {}", idx, e))
-        })
+        for channel in 1..=5 {
+            if 1u32 << (channel - 1) & controller_entry.active_channels == 0 {
+                continue;
+            }
+            let start = controller_entry.offset + (channel - 1) * 52;
+            let end = start + 52;
+            Self::proccess_fan_inner_color(&guard, channel, &batch.data[start..end])
+                .map_err(|e| anyhow!("Failed to set color for fan {}: {}", channel, e))?;
+        }
+        Ok(())
     }
 
     async fn firmware_version(&self) -> Result<(u8, u8, u8)> {
@@ -100,10 +137,6 @@ impl FanController for TTRiingQuad {
             .dev
             .get_device_info()
             .map_err(|e| anyhow!("Failed to get device info for TTRiingQuad: {e}"))
-    }
-
-    fn led_count(&self) -> usize {
-        52
     }
 
     async fn get_fingerprint(&self) -> Result<HardwareFingerprint> {
@@ -124,6 +157,7 @@ impl FanController for TTRiingQuad {
             vid: 0x264a,
             pids: vec![0x232B, 0x232C, 0x232D, 0x232E],
             channel_count: 5,
+            led_count: 52,
             name: "TTRiingQuad".to_string(),
             create_fallback_config: Self::create_fallback_config_internal,
         }
@@ -162,15 +196,14 @@ impl TTRiingQuad {
 
     pub fn create_one(api: &HidApi, cfg: &ControllerCfg) -> Result<Arc<dyn FanController>> {
         #[allow(irrefutable_let_patterns)]
-        if let ControllerCfg::RiingQuad { id, usb, fans } = cfg {
+        if let ControllerCfg::RiingQuad { id, usb, fans: _ } = cfg {
             let dev = api
                 .open(usb.vid, usb.pid)
                 .map_err(|e| anyhow!("Failed to open device: {e}"))?;
             Ok(Arc::new(TTRiingQuad(Arc::new(Mutex::new(Controller {
                 name: id.clone(),
                 dev,
-                fans: fans
-                    .iter()
+                fans: (0..5)
                     .map(|_| Fan {
                         current_speed: 0,
                         current_rpm: 0,
@@ -222,7 +255,7 @@ impl TTRiingQuad {
     fn proccess_fan_inner_color(
         guard: &MutexGuard<'_, Controller<HidDevice>>,
         idx: usize,
-        color_buffer: &[(u8, u8, u8)],
+        color_buffer: &[Rgb],
     ) -> Result<()> {
         guard.set_rgb(idx as u8, 0x24, color_buffer)
     }

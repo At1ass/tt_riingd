@@ -1,4 +1,7 @@
 //! System coordinator for managing service lifecycle and dependency injection.
+//!
+//! See the [Architecture Guide](https://docs.rs/tt_riingd/latest/tt_riingd/docs/architecture.html)
+//! for detailed service coordination patterns and lifecycle management.
 
 use std::sync::Arc;
 
@@ -18,16 +21,10 @@ use crate::{
     task_manager::TaskManager,
 };
 
-/// Enhanced SystemCoordinator with Dependency Injection pattern.
+/// System coordinator with dependency injection for service lifecycle management.
 ///
-/// Manages the complete lifecycle of all services using a provider-based
-/// architecture for loose coupling and testability.
-///
-/// # Features
-/// - Service prioritization (critical vs non-critical)
-/// - Graceful degradation on service failures
-/// - Event-driven communication between services
-/// - Proper async initialization and shutdown
+/// Manages service providers using prioritization, graceful degradation,
+/// and event-driven communication for loose coupling.
 pub struct SystemCoordinator {
     task_manager: TaskManager,
     event_bus: EventBus,
@@ -82,7 +79,6 @@ impl SystemCoordinator {
             .read()
             .await
             .batch_update(BatchCommand::Init, ExecutionMode::Blocking)
-            // .send_init()
             .await
             .context("Failed to initialize hardware controllers")?;
 

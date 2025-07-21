@@ -73,6 +73,9 @@ pub mod temperature_sensors;
 // Service providers
 pub mod providers;
 
+// Color buffer management
+pub mod buffer;
+
 // Re-exports for backward compatibility and convenience
 pub use core::{app_context, application, coordinator, event, task_manager};
 

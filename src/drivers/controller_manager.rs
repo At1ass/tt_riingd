@@ -3,19 +3,22 @@
 //! Provides high-level interface for controlling fan speed and RGB lighting
 //! through HID communication with Thermaltake devices.
 
-use std::collections::HashMap;
+use std::result::Result::Ok;
 
-use anyhow::{Ok, Result, anyhow};
+use anyhow::{Result, anyhow};
 use dashmap::DashMap;
 use futures::StreamExt;
 use tracing::{debug, error, warn};
 
-use crate::config::Config;
+use crate::{
+    buffer::{ColorSnapshot, SpeedSnapshot},
+    config::Config,
+};
 
 use super::{
-    ControllerColorBufferForSend, HardwareFingerprint,
+    HardwareFingerprint,
     commands::{BatchCommand, BatchResult, ControllerBatchStats, ExecutionMode},
-    registry::Registry,
+    registry::{ControllerSpec, Registry},
     worker_manager::ControllerWorkerManager,
 };
 
@@ -26,8 +29,6 @@ use super::{
 /// connected devices.
 ///
 /// See integration tests for usage examples.
-type ControllerColorBuffer = Vec<(usize, Vec<(u8, u8, u8)>)>;
-
 macro_rules! get_mapping_with_check {
     ($self:ident, $key:expr, |$val:ident| $then:expr) => {
         if let Some($val) = $self.controller_id2worker_id.get($key) {
@@ -54,6 +55,31 @@ impl ControllerManager {
             controller_id2worker_id: DashMap::new(),
             fingerprint2controller_id: DashMap::new(),
         }
+    }
+
+    pub fn get_controllers_spec(&self) -> Vec<ControllerSpec> {
+        self.fingerprint2controller_id
+            .iter()
+            .filter_map(|entry| {
+                let fingerprint = entry.key();
+                let controller_id = entry.value();
+                if let Ok((channels, leds)) =
+                    Registry::get_controller_spec(fingerprint.vendor_id, fingerprint.product_id)
+                {
+                    Some(ControllerSpec {
+                        id: controller_id.clone(),
+                        channels,
+                        leds,
+                    })
+                } else {
+                    warn!(
+                        "Failed to get controller spec for fingerprint: {:?}",
+                        fingerprint
+                    );
+                    None
+                }
+            })
+            .collect()
     }
 
     /// Creates Controllers from configuration file.
@@ -119,7 +145,7 @@ impl ControllerManager {
 
     pub async fn batch_update(
         &self,
-        command: BatchCommand<'_>,
+        command: BatchCommand,
         mode: ExecutionMode,
     ) -> Result<BatchResult> {
         match command {
@@ -209,20 +235,6 @@ impl ControllerManager {
         Ok(())
     }
 
-    pub async fn led_count(&self, controller_id: &String) -> Result<usize> {
-        get_mapping_with_check!(self, controller_id, |worker_id| {
-            if let Some(wid) = *worker_id {
-                debug!("Getting LED count for controller {}", controller_id);
-                self.worker_manager.led_count(wid).await
-            } else {
-                Err(anyhow!(
-                    "Worker for controller {} is not initialized",
-                    controller_id
-                ))
-            }
-        })
-    }
-
     async fn handle_init(&self) -> Result<ControllerBatchStats> {
         let total = self.worker_manager.worker_count();
         let mut successful = 0;
@@ -302,7 +314,7 @@ impl ControllerManager {
             .into_iter()
             .map(|(id, res)| {
                 res.map(|version| (id.clone(), version))
-                    .unwrap_or_else(|_| (id, (0, 0, 0))) // Default version if error
+                    .unwrap_or_else(|_| (id, (0, 0, 0)))
             })
             .collect();
 
@@ -319,7 +331,7 @@ impl ControllerManager {
 
     async fn handle_set_colors(
         &self,
-        color_data: &HashMap<String, ControllerColorBuffer>,
+        color_data: ColorSnapshot,
         mode: ExecutionMode,
     ) -> Result<ControllerBatchStats> {
         match mode {
@@ -330,7 +342,7 @@ impl ControllerManager {
 
     async fn handle_set_speeds(
         &self,
-        speed_data: &HashMap<String, Vec<(usize, u8)>>,
+        speed_data: SpeedSnapshot,
         mode: ExecutionMode,
     ) -> Result<ControllerBatchStats> {
         match mode {
@@ -339,42 +351,35 @@ impl ControllerManager {
         }
     }
 
-    async fn set_colors_blocking(
-        &self,
-        color_data: &HashMap<String, ControllerColorBuffer>,
-    ) -> Result<ControllerBatchStats> {
-        let total = color_data.len();
+    async fn set_colors_blocking(&self, color_data: ColorSnapshot) -> Result<ControllerBatchStats> {
+        let total = color_data.layout.controllers.len();
         let mut successful = 0;
         let mut failed_controllers = Vec::new();
 
-        let futures: Vec<_> = color_data
-            .iter()
-            .map(|(controller_id, buffer)| {
-                let batch_refs: ControllerColorBufferForSend = buffer
-                    .iter()
-                    .map(|(channel, colors)| (*channel, colors.as_slice()))
-                    .collect();
-
-                async move {
-                    if let Some(worker_id) = self.controller_id2worker_id.get(controller_id) {
-                        debug!("Setting colors for controller {}", controller_id);
-                        if let Some(worker_id) = *worker_id {
-                            // Use the worker manager to set colors
-                            debug!("Worker ID for controller {}: {}", controller_id, worker_id);
-                            let result =
-                                self.worker_manager.set_colors(worker_id, &batch_refs).await;
-                            Some((controller_id, result))
-                        } else {
-                            error!("Worker ID for controller {} is None", controller_id);
-                            None
-                        }
+        let shared_color_data = color_data.data.clone();
+        let futures = color_data.layout.controllers.into_iter().map(|controller| {
+            let controller_id = controller.controller_id.clone();
+            let color_buf = shared_color_data.clone();
+            async move {
+                if let Some(worker_id) = self.controller_id2worker_id.get(&controller_id) {
+                    debug!("Setting colors for controller {}", controller_id);
+                    if let Some(worker_id) = *worker_id {
+                        debug!("Worker ID for controller {}: {}", controller_id, worker_id);
+                        let result = self
+                            .worker_manager
+                            .set_colors(worker_id, color_buf, controller)
+                            .await;
+                        Some((controller_id, result))
                     } else {
-                        error!("Controller ID {} not found in mapping", controller_id);
-                        Some((controller_id, Err(anyhow::anyhow!("Controller not found"))))
+                        error!("Worker ID for controller {} is None", controller_id);
+                        None
                     }
+                } else {
+                    error!("Controller ID {} not found in mapping", controller_id);
+                    Some((controller_id, Err(anyhow::anyhow!("Controller not found"))))
                 }
-            })
-            .collect();
+            }
+        });
 
         let results = futures::future::join_all(futures)
             .await
@@ -399,25 +404,24 @@ impl ControllerManager {
         })
     }
 
-    async fn set_speeds_blocking(
-        &self,
-        speed_data: &HashMap<String, Vec<(usize, u8)>>,
-    ) -> Result<ControllerBatchStats> {
-        let total = speed_data.len();
+    async fn set_speeds_blocking(&self, speed_data: SpeedSnapshot) -> Result<ControllerBatchStats> {
+        let total = speed_data.layout.controllers.len();
         let mut successful = 0;
         let mut failed_controllers = Vec::new();
 
-        let futures: Vec<_> = speed_data
-            .iter()
-            .map(|(controller_id, speeds)| async move {
-                if let Some(worker_id) = self.controller_id2worker_id.get(controller_id) {
+        let shared_speed_data = speed_data.data.clone();
+
+        let futures = speed_data.layout.controllers.into_iter().map(|controller| {
+            let controller_id = controller.controller_id.clone();
+            let shared_speed_data = shared_speed_data.clone();
+            async move {
+                if let Some(worker_id) = self.controller_id2worker_id.get(&controller_id) {
                     debug!("Setting speeds for controller {}", controller_id);
                     if let Some(worker_id) = *worker_id {
-                        // Use the worker manager to set colors
                         debug!("Worker ID for controller {}: {}", controller_id, worker_id);
                         let result = self
                             .worker_manager
-                            .set_speeds(worker_id, speeds.as_slice())
+                            .set_speeds(worker_id, shared_speed_data.clone(), controller)
                             .await;
                         Some((controller_id, result))
                     } else {
@@ -428,8 +432,8 @@ impl ControllerManager {
                     error!("Controller ID {} not found in mapping", controller_id);
                     Some((controller_id, Err(anyhow::anyhow!("Controller not found"))))
                 }
-            })
-            .collect();
+            }
+        });
 
         let results = futures::future::join_all(futures)
             .await
@@ -454,35 +458,34 @@ impl ControllerManager {
         })
     }
 
-    fn set_colors_fire_and_forget(
-        &self,
-        color_data: &HashMap<String, ControllerColorBuffer>,
-    ) -> ControllerBatchStats {
-        let total = color_data.len();
+    fn set_colors_fire_and_forget(&self, color_data: ColorSnapshot) -> ControllerBatchStats {
+        let total = color_data.layout.controllers.len();
         let mut successful = 0;
         let mut failed_controllers = Vec::new();
 
-        for (controller_id, buffer) in color_data {
-            if let Some(worker_id) = self.controller_id2worker_id.get(controller_id) {
-                debug!("Setting colors for controller {}", controller_id);
+        let shared_color_data = color_data.data.clone();
 
-                let batch_refs: ControllerColorBufferForSend = buffer
-                    .iter()
-                    .map(|(channel, colors)| (*channel, colors.as_slice()))
-                    .collect();
+        for controller in color_data.layout.controllers.into_iter() {
+            let controller_id = controller.controller_id.clone();
+            if let Some(worker_id) = self.controller_id2worker_id.get(&controller_id) {
+                debug!("Setting colors for controller {}", &controller_id);
 
                 if let Some(worker_id) = *worker_id {
-                    if self.worker_manager.try_set_colors(worker_id, &batch_refs) {
+                    if self.worker_manager.try_set_colors(
+                        worker_id,
+                        shared_color_data.clone(),
+                        controller,
+                    ) {
                         successful += 1;
                     } else {
-                        failed_controllers.push(controller_id.clone());
+                        failed_controllers.push(controller_id);
                     }
                 } else {
-                    error!("Worker ID for controller {} is None", controller_id);
+                    error!("Worker ID for controller {} is None", &controller_id);
                 }
             } else {
-                error!("Controller ID {} not found in mapping", controller_id);
-                failed_controllers.push(controller_id.clone());
+                error!("Controller ID {} not found in mapping", &controller_id);
+                failed_controllers.push(controller_id);
                 continue;
             }
         }
@@ -495,32 +498,34 @@ impl ControllerManager {
         }
     }
 
-    fn set_speeds_fire_and_forget(
-        &self,
-        speed_data: &HashMap<String, Vec<(usize, u8)>>,
-    ) -> ControllerBatchStats {
-        let total = speed_data.len();
+    fn set_speeds_fire_and_forget(&self, speed_data: SpeedSnapshot) -> ControllerBatchStats {
+        let total = speed_data.layout.controllers.len();
         let mut successful = 0;
         let mut failed_controllers = Vec::new();
 
-        for (controller_id, speeds) in speed_data {
-            if let Some(worker_id) = self.controller_id2worker_id.get(controller_id) {
-                debug!("Setting speeds for controller {}", controller_id);
+        let shared_speed_data = speed_data.data.clone();
+
+        for controller in speed_data.layout.controllers.into_iter() {
+            let controller_id = controller.controller_id.clone();
+            if let Some(worker_id) = self.controller_id2worker_id.get(&controller_id) {
+                debug!("Setting speeds for controller {}", &controller_id);
+
                 if let Some(worker_id) = *worker_id {
-                    if self
-                        .worker_manager
-                        .try_set_speeds(worker_id, speeds.as_slice())
-                    {
+                    if self.worker_manager.try_set_speeds(
+                        worker_id,
+                        shared_speed_data.clone(),
+                        controller,
+                    ) {
                         successful += 1;
                     } else {
-                        failed_controllers.push(controller_id.clone());
+                        failed_controllers.push(controller_id);
                     }
                 } else {
-                    error!("Worker ID for controller {} is None", controller_id);
+                    error!("Worker ID for controller {} is None", &controller_id);
                 }
             } else {
-                error!("Controller ID {} not found in mapping", controller_id);
-                failed_controllers.push(controller_id.clone());
+                error!("Controller ID {} not found in mapping", &controller_id);
+                failed_controllers.push(controller_id);
                 continue;
             }
         }

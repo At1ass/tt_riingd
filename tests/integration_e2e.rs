@@ -13,7 +13,7 @@ mod mocks;
 use mockall::predicate::*;
 use mocks::{
     MockAppState, MockMockableFanController, MockMockableTemperatureSensor, MockableFanController,
-    MockableTemperatureSensor, test_utils::*,
+    MockableTemperatureSensor, test_helpers, test_utils::*,
 };
 
 use tt_riingd::{
@@ -398,7 +398,7 @@ async fn test_mock_hardware_integration() -> Result<()> {
     mock_controller
         .expect_update_speed_batch()
         .times(3)
-        .returning(|_| Ok(()));
+        .returning(|_, _| Ok(()));
 
     mock_sensor
         .expect_sensor_key()
@@ -419,15 +419,18 @@ async fn test_mock_hardware_integration() -> Result<()> {
     assert_eq!(sensor_key, "cpu_temp");
 
     // Simulate monitoring loop
-    for i in 1..=3 {
+    for _i in 1..=3 {
         let temperature = mock_sensor.read_temperature().await?;
         assert_eq!(temperature, 58.5);
 
         // Calculate fan speed (simplified)
-        let fan_speed = ((temperature - 20.0) * 2.0).clamp(0.0, 100.0) as u8;
+        let _fan_speed = ((temperature - 20.0) * 2.0).clamp(0.0, 100.0) as u8;
 
         mock_controller
-            .update_speed_batch(vec![(i, fan_speed)])
+            .update_speed_batch(
+                test_helpers::create_speed_buffer(),
+                test_helpers::default_controller_entry(),
+            )
             .await?;
     }
 

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use dashmap::DashMap;
 use tokio::sync::{broadcast, mpsc, oneshot};
-use tracing::info;
+use tracing::{debug, trace, warn};
 
 use crate::{impl_multiple_target_request, impl_single_target_request};
 
@@ -276,7 +276,7 @@ pub struct MessageBroker {
 
 impl MessageBroker {
     pub fn new() -> Self {
-        info!("Initializing MessageBroker with default capacity");
+        debug!("Initializing MessageBroker with default capacity");
         let (event_sender, _) = broadcast::channel(1000);
         Self {
             event_sender,
@@ -285,7 +285,7 @@ impl MessageBroker {
     }
 
     pub fn with_capacity(capacity: usize) -> Self {
-        info!("Initializing MessageBroker with capacity: {}", capacity);
+        debug!("Initializing MessageBroker with capacity: {}", capacity);
         let (event_sender, _) = broadcast::channel(capacity);
         Self {
             event_sender,
@@ -296,15 +296,15 @@ impl MessageBroker {
     pub fn register_handler(&self, service_type: ServiceType, handler: mpsc::Sender<Request>) {
         let e = self.service_handlers.insert(service_type, handler);
         if e.is_some() {
-            info!(
+            warn!(
                 "Replaced existing handler for {:?} with new handler",
                 service_type
             );
         } else {
-            info!("Registered new handler for {:?}", service_type);
+            debug!("Registered new handler for {:?}", service_type);
         }
 
-        info!("Current handler count: {}", self.service_handlers.len());
+        trace!("Current handler count: {}", self.service_handlers.len());
     }
 
     pub fn notify(&self, event: Event) -> Result<()> {
@@ -358,60 +358,57 @@ impl MessageBroker {
 
         let payload_arc = Arc::new(request);
 
-        info!(
+        debug!(
             "Executing request on multiple targets: {:?}",
             target_services
         );
 
-        info!("Total registered services: {}", self.service_handlers.len());
+        debug!("Total registered services: {}", self.service_handlers.len());
 
         let tasks: Vec<_> = target_services
             .iter()
             .filter_map(|&service_type| {
-                info!("Checking for handler for service type: {:?}", service_type);
+                debug!("Checking for handler for service type: {:?}", service_type);
                 let handler = self.service_handlers.get(&service_type);
 
                 if handler.is_none() {
-                    info!("No handler found for service type: {:?}", service_type);
+                    warn!("No handler found for service type: {:?}", service_type);
                     return None;
                 }
 
                 handler.map(|handler| {
-                    info!("Found handler for service type: {:?}", service_type);
+                    debug!("Found handler for service type: {:?}", service_type);
                     let handler = handler.value().clone();
                     let (response_tx, response_rx) = oneshot::channel();
                     let req = Request {
-                        payload: payload_arc.clone(), // Cheap Arc pointer clone (8 bytes)
+                        payload: payload_arc.clone(),
                         response_channel: response_tx,
                     };
 
-                    (service_type, handler.clone(), req, response_rx)
-                })
-            })
-            .map(|(service_type, handler, req, response_rx)| {
-                info!("Spawning task for service type: {:?}", service_type);
-                tokio::spawn(async move {
-                    let _ = handler.send(req).await;
-                    (service_type, response_rx.await)
+                    async move {
+                        debug!("Spawning task for service type: {:?}", service_type);
+                        let _ = handler.send(req).await;
+                        (service_type, response_rx.await)
+                    }
                 })
             })
             .collect();
 
         let results = futures::future::join_all(tasks).await;
-        info!(
+        debug!(
             "Received responses for multiple targets: {:?}",
             results.len()
         );
-        let mut responses = HashMap::new();
-
-        for result in results.into_iter().flatten() {
-            let (service_type, response_result) = result;
-            if let Ok(Ok(response)) = response_result {
-                responses.insert(service_type, response);
-            }
-        }
-
-        Ok(responses)
+        Ok(results
+            .into_iter()
+            .filter_map(|(service, result)| {
+                if let Ok(Ok(response)) = result {
+                    Some((service, response))
+                } else {
+                    None
+                }
+            })
+            .collect::<HashMap<_, _>>())
     }
 
     pub fn handler_count(&self) -> usize {

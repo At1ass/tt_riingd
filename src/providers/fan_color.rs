@@ -1,15 +1,18 @@
 use anyhow::Result;
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
-use std::sync::atomic::AtomicUsize;
+use futures::StreamExt;
+use futures::stream::iter;
+use std::sync::Arc;
 use std::time::Duration;
-use std::{collections::HashMap, sync::Arc};
-use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard, mpsc};
+use tokio::sync::mpsc;
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::ConfigManager;
+use crate::buffer::Rgb;
+use crate::buffer::color::ColorBuffer;
 use crate::config::EffectStore;
 use crate::core::event::{Event, MessageBroker, RequestPayload, Response, ServiceType};
 use crate::drivers::commands::{BatchCommand, ExecutionMode};
@@ -69,40 +72,6 @@ pub struct FanColorControlServiceProvider {
     cache: FanColorServiceCache,
 }
 
-type ControllerColorBuffer = Vec<(usize, Vec<(u8, u8, u8)>)>;
-// type ConrollerId = u8;
-type ConrollerId = String;
-type Buffer = HashMap<ConrollerId, ControllerColorBuffer>;
-
-struct DoubleBuffer {
-    buffer: [RwLock<Buffer>; 2],
-    write_index: AtomicUsize,
-}
-
-impl DoubleBuffer {
-    fn new() -> Self {
-        Self {
-            buffer: [RwLock::new(HashMap::new()), RwLock::new(HashMap::new())],
-            write_index: AtomicUsize::new(0),
-        }
-    }
-
-    async fn get_write_buffer(&self) -> RwLockWriteGuard<'_, Buffer> {
-        let index = self.write_index.load(std::sync::atomic::Ordering::SeqCst);
-        self.buffer[index].write().await
-    }
-
-    async fn get_read_buffer(&self) -> RwLockReadGuard<'_, Buffer> {
-        let index = self.write_index.load(std::sync::atomic::Ordering::SeqCst) ^ 1;
-        self.buffer[index].read().await
-    }
-
-    fn swap_buffers(&self) {
-        self.write_index
-            .fetch_xor(1, std::sync::atomic::Ordering::SeqCst);
-    }
-}
-
 impl FanColorControlServiceProvider {
     /// Creates a new fan color control service provider.
     pub async fn new(
@@ -132,7 +101,9 @@ impl ServiceProvider for FanColorControlServiceProvider {
         let runners = self.cache.runners.clone();
         let new_runners = self.cache.new_runners.clone();
 
-        let double_buffer = Arc::new(DoubleBuffer::new());
+        let spec = state.controllers.read().await.get_controllers_spec();
+        let double_buffer = Arc::new(ColorBuffer::from_cache(&spec));
+
         task_manager
             .spawn_task(format!("{}_calculate", self.name()), {
                 let state = state.clone();
@@ -180,7 +151,7 @@ impl ServiceProvider for FanColorControlServiceProvider {
 async fn run_calculate_colors_service(
     state: Arc<AppState>,
     event_bus: MessageBroker,
-    buffer: Arc<DoubleBuffer>,
+    buffer: Arc<ColorBuffer>,
     cancel_token: CancellationToken,
     runners: Arc<ArcSwap<EffectStore>>,
     new_runners: Arc<ArcSwap<EffectStore>>,
@@ -282,11 +253,11 @@ async fn handle_notify(
 
 async fn run_transmit_color_changes(
     state: Arc<AppState>,
-    event_bus: MessageBroker,
-    buffer: Arc<DoubleBuffer>,
+    _event_bus: MessageBroker,
+    buffer: Arc<ColorBuffer>,
     cancel_token: CancellationToken,
 ) -> Result<()> {
-    let mut interval = interval(Duration::from_millis(16));
+    let mut interval = interval(Duration::from_millis(50));
 
     loop {
         tokio::select! {
@@ -295,7 +266,7 @@ async fn run_transmit_color_changes(
                 break;
             }
             _instant = interval.tick() => {
-                if let Err(e) = transmit_color_changes(state.clone(), &event_bus, buffer.clone()).await {
+                if let Err(e) = transmit_color_changes(state.clone(), buffer.clone()).await {
                     error!("Failed to update fan colors: {e}");
                 }
             }
@@ -305,85 +276,73 @@ async fn run_transmit_color_changes(
 }
 
 async fn calculate_fan_colors(
-    state: &Arc<AppState>,
+    _state: &Arc<AppState>,
     _event_bus: &MessageBroker,
-    buffer: Arc<DoubleBuffer>,
+    buffer: Arc<ColorBuffer>,
     runners: Arc<ArcSwap<EffectStore>>,
 ) -> Result<()> {
-    let mut write_buffer = buffer.get_write_buffer().await;
     let runners = runners.load();
 
-    for runner in runners.runners.iter() {
-        debug!("Calculating colors for effect: {}", runner.key());
-        let instance = runner.value();
-        if let Some(rgb) = instance.runner.next_rgb().await {
-            for fan_ref in &instance.targets {
-                let buf = write_buffer
-                    .entry(fan_ref.controller_id.clone())
-                    .or_default();
+    let runners_values = iter(runners.runners.iter())
+        .filter_map(|v| async move {
+            let instance = v.value();
+            instance
+                .runner
+                .next_rgb()
+                .await
+                .map(|rgb| (instance.clone(), rgb))
+        })
+        .collect::<Vec<_>>()
+        .await;
 
-                if !buf
-                    .iter_mut()
-                    .any(|(channel, _)| *channel == fan_ref.channel)
-                {
-                    if let Ok(led) = state
+    let layout = buffer.layout.clone();
+
+    buffer
+        .batch_fill(move |data| {
+            for (instance, rgb) in &runners_values {
+                for fan_ref in &instance.targets {
+                    if let Some(entry) = layout
                         .controllers
-                        .read()
-                        .await
-                        .led_count(&fan_ref.controller_id)
-                        .await
+                        .iter()
+                        .find(|c| c.controller_id == fan_ref.controller_id)
                     {
-                        buf.push((fan_ref.channel, vec![(0, 0, 0); led]));
-                    } else {
-                        warn!(
-                            "Controller {} not found for fan reference: {:?}",
-                            fan_ref.controller_id, fan_ref
-                        );
-                        continue;
+                        let start = entry.offset + (fan_ref.channel - 1) * entry.leds_per_channel;
+                        let end = start + entry.leds_per_channel;
+
+                        if end <= data.len() {
+                            let color = Rgb {
+                                r: rgb[0],
+                                g: rgb[1],
+                                b: rgb[2],
+                            };
+                            data[start..end].fill(color);
+                        }
                     }
                 }
-
-                buf.iter_mut()
-                    .find(|(channel, _)| *channel == fan_ref.channel)
-                    .iter_mut()
-                    .for_each(|(_, buffer)| {
-                        debug!(
-                            "Setting color for controller {} channel {}: {:?}",
-                            fan_ref.controller_id, fan_ref.channel, rgb
-                        );
-                        buffer.iter_mut().for_each(|color| {
-                            color.0 = rgb[0];
-                            color.1 = rgb[1];
-                            color.2 = rgb[2];
-                        });
-                    });
             }
-        } else {
-            warn!("No RGB color defined for effect '{}'", runner.key());
-        }
-    }
-
-    buffer.swap_buffers();
+            Ok(())
+        })
+        .await?;
 
     Ok(())
 }
 
-async fn transmit_color_changes(
-    state: Arc<AppState>,
-    _event_bus: &MessageBroker,
-    buffer: Arc<DoubleBuffer>,
-) -> Result<()> {
-    let read_buffer = buffer.get_read_buffer().await;
+async fn transmit_color_changes(state: Arc<AppState>, buffer: Arc<ColorBuffer>) -> Result<()> {
+    let snapshot = buffer.take_snapshot().await?;
 
     state
         .controllers
         .read()
         .await
         .batch_update(
-            BatchCommand::SetColors { data: &read_buffer },
+            BatchCommand::SetColors {
+                data: snapshot.clone(),
+            },
             ExecutionMode::Blocking,
         )
         .await?;
+
+    buffer.restore_snapshot(snapshot).await?;
     Ok(())
 }
 

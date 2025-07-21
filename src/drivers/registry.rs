@@ -1,35 +1,10 @@
 //! Hardware registry for automatic controller detection and configuration caching.
 //!
-//! The Registry module provides a centralized system for:
-//! - Automatic hardware detection and driver selection
-//! - Configuration caching for hotplug support
-//! - Fallback controller creation for unknown devices
-//! - Static registration of supported hardware types
+//! Provides automatic hardware detection, driver selection, and configuration caching
+//! for hotplug support using a factory pattern with static caching.
 //!
-//! # Architecture
-//!
-//! The Registry implements a factory pattern with static caching to support
-//! the hotplug architecture:
-//!
-//! ```text
-//! ┌─────────────────────────────────────────────────────────────┐
-//! │                    Registry (Static)                       │
-//! │  ┌─────────────────────────────────────────────────────────┐ │
-//! │  │            Supported Hardware                           │ │
-//! │  │  TTRiingQuad, Future drivers...                         │ │
-//! │  └─────────────────────────────────────────────────────────┘ │
-//! │  ┌─────────────────────────────────────────────────────────┐ │
-//! │  │            Configuration Cache                          │ │
-//! │  │  Device configs for hotplug restoration                │ │
-//! │  └─────────────────────────────────────────────────────────┘ │
-//! └─────────────────────────────────────────────────────────────┘
-//!                              │
-//!                              ▼
-//! ┌─────────────────────────────────────────────────────────────┐
-//! │               Controller Instances                          │
-//! │         Arc<dyn FanController> objects                      │
-//! └─────────────────────────────────────────────────────────────┘
-//! ```
+//! See the [Hardware Abstraction Guide](https://docs.rs/tt_riingd/latest/tt_riingd/docs/hardware.html)
+//! for detailed architecture and controller registration patterns.
 //!
 //! # Hotplug Configuration Caching
 //!
@@ -134,6 +109,7 @@ use tracing::{debug, info, warn};
 ///     vid: 0x264a,
 ///     pids: vec![0x2330, 0x2331],
 ///     channel_count: 5,
+///     led_count: 52,
 ///     name: "TTRiingQuad".to_string(),
 ///     create_fallback_config: |fingerprint| {
 ///         ControllerCfg::RiingQuad {
@@ -156,6 +132,8 @@ pub struct HardwareInfo {
     pub pids: Vec<u16>,
     /// Maximum number of fan channels this hardware supports.
     pub channel_count: u8,
+    /// Number of LEDs supported by this hardware type.
+    pub led_count: u8,
     /// Human-readable name for this hardware type.
     pub name: String,
     /// Factory function for creating fallback configurations.
@@ -192,11 +170,20 @@ impl DetectedController {
     }
 }
 
+pub struct ControllerSpec {
+    /// Unique identifier for the controller instance.
+    pub id: String,
+    /// Channel configuration for the controller.
+    pub channels: u8,
+    /// Leds count for the controller.
+    pub leds: u8,
+}
+
 /// Central registry for hardware detection and controller management.
 ///
 /// Provides static methods for:
 /// - Hardware detection and driver instantiation
-/// - Configuration caching for hotplug support  
+/// - Configuration caching for hotplug support
 /// - Fallback controller creation
 /// - Supported hardware registration
 ///
@@ -220,6 +207,17 @@ impl Registry {
         static CONFIG_CACHE: LazyLock<DashMap<HardwareFingerprint, ControllerCfg>> =
             LazyLock::new(DashMap::new);
         &CONFIG_CACHE
+    }
+
+    pub fn get_controller_spec(vid: u16, pid: u16) -> Result<(u8, u8)> {
+        let hardware_info = Self::get_supported_hardware()
+            .iter()
+            .find(|hw| hw.vid == vid && hw.pids.contains(&pid))
+            .ok_or_else(|| {
+                anyhow::anyhow!("Unsupported hardware: VID:PID {:04X}:{:04X}", vid, pid)
+            })?;
+
+        Ok((hardware_info.channel_count, hardware_info.led_count))
     }
 
     pub fn is_supported_hardware(vid: u16, pid: u16) -> bool {
@@ -336,11 +334,10 @@ impl Registry {
 
         let added_count = detected.iter().fold(0, |count, detected_controller| {
             if !Self::controller_exists_in_config(&config.controllers, detected_controller) {
-                // Add new controller with fallback settings
                 let fallback_config = (detected_controller.hardware_info.create_fallback_config)(&HardwareFingerprint {
                     vendor_id: detected_controller.hardware_info.vid,
                     product_id: detected_controller.detected_pid,
-                    serial: None, // Serial is not used in fallback
+                    serial: None,
                 });
                 warn!(
                     "Controller {}:{} (VID:PID {:04X}:{:04X}) not found in configuration, adding with fallback settings",
@@ -490,6 +487,7 @@ mod tests {
             vid: 0x264A,
             pids: vec![0x232B, 0x232C],
             channel_count: 4,
+            led_count: 52,
             name: "Test Controller".to_string(),
             create_fallback_config: |_fingerprint| ControllerCfg::RiingQuad {
                 id: "test".to_string(),
@@ -527,6 +525,7 @@ mod tests {
             vid: 0x264A,
             pids: vec![0x232B],
             channel_count: 4,
+            led_count: 52,
             name: "Test Controller".to_string(),
             create_fallback_config: |_fingerprint| ControllerCfg::RiingQuad {
                 id: "test".to_string(),
@@ -560,7 +559,7 @@ mod tests {
             id: "different-controller".to_string(),
             usb: UsbSelector {
                 vid: 0x264A,
-                pid: 0x232C, // Different PID
+                pid: 0x232C,
                 serial: None,
             },
             fans: vec![],

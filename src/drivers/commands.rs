@@ -1,15 +1,8 @@
-use std::collections::HashMap;
+use crate::buffer::{ColorSnapshot, SpeedSnapshot};
 
-use super::ControllerColorBuffer;
-
-#[derive(Debug)]
-pub enum BatchCommand<'a> {
-    SetColors {
-        data: &'a HashMap<String, ControllerColorBuffer>,
-    },
-    SetSpeeds {
-        data: &'a HashMap<String, Vec<(usize, u8)>>,
-    },
+pub enum BatchCommand {
+    SetColors { data: ColorSnapshot },
+    SetSpeeds { data: SpeedSnapshot },
     Init,
     GetFirmwares,
 }

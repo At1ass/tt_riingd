@@ -1,6 +1,8 @@
 use anyhow::{Ok, Result, anyhow};
 use arrayvec::ArrayVec;
 
+use crate::buffer::Rgb;
+
 /// Protocol constants for TT Riing Quad HID communication
 mod protocol_consts {
     // Command codes
@@ -27,9 +29,9 @@ mod protocol_consts {
     pub const FW_MAJOR_OFFSET: usize = 0;
     pub const FW_MINOR_OFFSET: usize = 1;
     pub const FW_PATCH_OFFSET: usize = 2;
-    pub const DATA_SPEED_OFFSET: usize = 2;
-    pub const DATA_RPM_LOW_OFFSET: usize = 3;
-    pub const DATA_RPM_HIGH_OFFSET: usize = 4;
+    pub const DATA_SPEED_OFFSET: usize = 4;
+    pub const DATA_RPM_LOW_OFFSET: usize = 5;
+    pub const DATA_RPM_HIGH_OFFSET: usize = 6;
 }
 
 type PackerBuffer = ArrayVec<u8, { protocol_consts::RESPONSE_LEN }>;
@@ -48,7 +50,7 @@ pub enum Command<'a> {
     SetRgb {
         port: u8,
         mode: u8,
-        colors: &'a [(u8, u8, u8)],
+        colors: &'a [Rgb],
     },
 }
 
@@ -97,8 +99,8 @@ impl Command<'_> {
                     port,
                     mode,
                 ])?;
-                for &(r, g, b) in colors {
-                    push!(&[g, r, b])?;
+                for &rgb in colors.iter() {
+                    push!(&[rgb.g, rgb.r, rgb.b])?;
                 }
                 Ok(())
             }
@@ -121,8 +123,8 @@ impl Command<'_> {
             Command::SetRgb { port, mode, colors } => {
                 let mut buf = Vec::with_capacity(5 + 3 * colors.len());
                 buf.extend_from_slice(&[PREFIX_0, PREFIX_1_32, CMD_SET_RGB, port, mode]);
-                for &(r, g, b) in colors {
-                    buf.extend_from_slice(&[g, r, b]);
+                for &rgb in colors.iter() {
+                    buf.extend_from_slice(&[rgb.g, rgb.r, rgb.b]);
                 }
                 buf
             }
